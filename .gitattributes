@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# New generic framework and portable prototype sources.
+src/framework/** text eol=lf
+examples/universal-rpg/** text eol=lf
+test/framework-state.test.mjs text eol=lf
+docs/UNIVERSAL-RPG-FRAMEWORK.md text eol=lf
+docs/FRAMEWORK-PROTOTYPE.md text eol=lf

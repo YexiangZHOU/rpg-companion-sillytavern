@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "validate_locale": "node src/i18n/validator.js --watch",
-    "validate_locale_once": "node src/i18n/validator.js"
+    "validate_locale_once": "node src/i18n/validator.js",
+    "test:framework": "node --test test/framework-state.test.mjs",
+    "preview:framework": "node examples/universal-rpg/build-preview.mjs"
   },
   "keywords": [],
   "author": "",

@@ -25,3 +25,6 @@ node_modules/
 # Claude
 CLAUDE.md
 yarn.lock
+
+# Generated standalone prototype; maintain its sources instead.
+examples/universal-rpg/preview.html
