@@ -19,6 +19,14 @@ const button = (label, callback, className = 'uf-button') => {
     }); return element;
 };
 
+/** A display fallback only; never changes the model-defined schema or saved values. */
+export function gameSummaryFields(state, entity, appearance = []) {
+    if (entity.kind === 'npc') return [];
+    const fields = activeFrameworkGroups(state, entity.id).flatMap(g => activeFrameworkFields(state, g.id)).filter(f => !appearance.includes(f));
+    const explicit = fields.filter(f => f.summary);
+    return explicit.length ? explicit.slice(0, 6) : fields.filter(f => ['number', 'resource', 'choice', 'boolean'].includes(f.type) && state.values[f.id] != null).slice(0, 3);
+}
+
 export class FrameworkPanel {
     constructor(root, { onOperation, language = 'zh', getPortrait, presentation = 'editor', onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait } = {}) {
         Object.assign(this, { root, onOperation, getPortrait, presentation, onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait }); this.strings = panelStrings[language] ?? panelStrings.zh;
@@ -151,20 +159,25 @@ export class FrameworkPanel {
         const groups = activeFrameworkGroups(state, entity.id);
         const appearance = groups.flatMap(g => activeFrameworkFields(state, g.id)).filter(f => f.type === 'text' && /^(?:外观|相貌|外貌|appearance)$/i.test(f.label.trim()));
         if (appearance.length) { const section = node('div', 'uf-appearance'); for (const field of appearance) section.append(this.fieldView(field)); this.root.append(section); }
-        const summaryFields = entity.kind === 'npc' ? [] : groups.flatMap(g => activeFrameworkFields(state, g.id)).filter(f => f.summary && !appearance.includes(f)).slice(0,6);
+        const summaryFields = gameSummaryFields(state, entity, appearance);
         if (summaryFields.length) { const summaries = node('div','uf-game-summaries'); summaryFields.forEach(f => summaries.append(this.fieldView(f, true))); this.root.append(summaries); }
         const content = node('section', 'uf-content');
+        if (entity.kind === 'scene' && !entity.description?.trim() && !groups.some(g => activeFrameworkFields(state, g.id).some(f => {
+            const value = state.values[f.id]; return value != null && value !== '' && (!Array.isArray(value) || value.length > 0);
+        }))) content.append(node('p', 'uf-description uf-empty-scene', zh ? '场景详情尚未记录；对话中可能已有尚未同步的信息。' : 'Scene details have not been recorded; the conversation may contain unsynced information.'));
         let parent = content;
         if (entity.kind === 'npc') {
             const status = this.details(`status_${entity.id}`, zh ? '状态' : 'Status'); status.dataset.detail = `status_${entity.id}`;
             if (this.editing) status.open = true;
             content.append(status); parent = status;
         }
-        for (const [index, group] of groups.entries()) {
+        let visibleGroups = 0;
+        for (const group of groups) {
             const fields = activeFrameworkFields(state, group.id).filter(f => !appearance.includes(f) && (this.editing || !summaryFields.includes(f)));
             if (!fields.length && !this.editing) continue;
             const section = this.details(`game_group_${group.id}`, group.label); section.classList.add('uf-group'); section.dataset.detail = `game_group_${group.id}`;
-            section.open = this.opened.get(section.dataset.detail) ?? (index === 0 || entity.kind === 'npc' || entity.kind === 'scene');
+            section.open = this.opened.get(section.dataset.detail) ?? (visibleGroups === 0 || entity.kind === 'npc' || entity.kind === 'scene');
+            visibleGroups++;
             if (group.description) section.append(node('p', 'uf-description', group.description));
             const tools = node('div', 'uf-group-tools'); tools.append(button(t.rename, () => this.renameGroup(group), 'uf-subtle'));
             for (const mode of ['structure', 'value']) {

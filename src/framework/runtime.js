@@ -17,16 +17,46 @@ import { encounterModal } from '../systems/ui/encounterUI.js';
 import { preserveBalancedDice } from '../systems/ui/balancedLayout.js';
 import { protocolVisibleText } from '../systems/features/diceEngine.mjs';
 import { withAvatarJob } from '../systems/features/avatarQueue.mjs';
+import { FrameworkObservations, reviewFrameworkChat, frameworkDiagnosticLabel } from './diagnostics.mjs';
 
-let initialized = false, playerPanel, scenePanel, nativePanel, nativeModal, timer, observer, frame;
+let initialized = false, playerPanel, scenePanel, nativePanel, nativeModal, timer, observer, frame, panelContext;
 const portraitBusy = new WeakSet();
 const visualsSeen = new WeakMap();
 const node = (tag, cls, text) => { const e = document.createElement(tag); e.className = cls; if (text) e.textContent = text; return e; };
 const zh = () => i18n.currentLanguage.startsWith('zh');
 const text = (a,b) => zh() ? a : b;
 const save = () => saveFrameworkVerified(getContext());
+const observations = new FrameworkObservations();
 const report = message => { toastr.warning(message, text('通用 RPG 框架','Universal RPG framework')); const el = document.getElementById('rpg-framework-feedback'); if (el) el.textContent = message; };
-export const frameworkChat = new FrameworkChat({ getContext, save, enabled: () => !!extensionSettings.enabled, render: renderFramework, report });
+export const frameworkChat = new FrameworkChat({ getContext, save, enabled: () => !!extensionSettings.enabled, render: renderFramework, report, observe: (message, event) => { observations.record(message, event); renderDiagnostics(); } });
+
+function renderDiagnostics() {
+    const host = document.getElementById('rpg-framework-diagnostics');
+    if (!host?.open) return;
+    const body = host.querySelector('.uf-diagnostics-body'); body.replaceChildren();
+    const review = reviewFrameworkChat(getContext().chat ?? [], observations);
+    body.append(node('p', '', text('仅查看当前聊天选中的回复分支，最多显示最近100条。现场记录只保留到页面刷新；“重新校验”使用当前解析器，不能还原当时的处理或网络错误。保存快照不保证剧情信息完整。', 'Current chat and selected swipes only, up to 100 replies. Live observations last until page reload. Replay uses the current parser and cannot reconstruct historical processing or network errors. A snapshot does not prove narrative coverage.')));
+    const exportButton = node('button', 'menu_button', text('导出诊断摘要', 'Export diagnostic summary')); exportButton.type = 'button';
+    exportButton.addEventListener('click', () => {
+        const current = reviewFrameworkChat(getContext().chat ?? [], observations);
+        const url = URL.createObjectURL(new Blob([JSON.stringify(current, null, 2)], {type: 'application/json'}));
+        const link = document.createElement('a'); link.href = url; link.download = 'rpg-framework-diagnostics.json'; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }); body.append(exportButton);
+    if (!review.rows.length) body.append(node('p', '', text('暂无模型回复。', 'No assistant replies.')));
+    for (const row of [...review.rows].reverse()) {
+        const item = node('div', 'uf-diagnostic-row');
+        item.append(node('strong', '', `#${row.message} · ${frameworkDiagnosticLabel(row, zh())}`));
+        const basis = row.basis === 'saved_snapshot' ? text('保存快照', 'Saved snapshot') : row.basis === 'observed_this_page' ? text('本页面现场记录（刷新即失）', 'Live observation (lost on reload)') : text('重新校验，非历史日志', 'Replay, not a historical log');
+        item.append(node('small', '', `${basis}${row.code ? ` · ${row.code}` : ''}${row.revision != null ? ` · v${row.revision}` : ''}${row.at ? ` · ${row.at}` : ''}`));
+        const locate = node('button', 'menu_button', text('定位回复', 'Locate reply')); locate.type = 'button';
+        locate.addEventListener('click', () => {
+            const message = document.querySelector(`#chat .mes[mesid="${row.message - 1}"]`);
+            if (message) message.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            else report(text('该回复尚未显示，请先加载较早消息。', 'Load earlier messages to locate this reply.'));
+        }); item.append(locate); body.append(item);
+    }
+}
 export const currentFrameworkState = () => frameworkChat.state();
 const sceneEntity = e => e.kind === 'scene';
 const leftEntity = e => sceneEntity(e) || e.kind === 'npc';
@@ -65,6 +95,9 @@ function mount() {
         select.addEventListener('change', async () => { select.disabled = true; try { incrementSeparateGenerationId(); await frameworkChat.setMode(select.value); await eventSource.emit(event_types.CHAT_LOADED); } catch { report(text('模式保存失败','Could not save mode')); } finally { select.disabled = false; } });
         label.append(select); controls.append(label);
         const feedback = node('small','',text('分类与初值由模型建立；旧记录保留。','The model creates categories and initial values. Legacy records are preserved.')); feedback.id = 'rpg-framework-feedback'; feedback.setAttribute('role','status'); controls.append(feedback); more.prepend(controls);
+        const diagnostics = node('details', 'uf-diagnostics'); diagnostics.id = 'rpg-framework-diagnostics';
+        diagnostics.append(node('summary', '', text('数据更新诊断', 'Data update diagnostics')), node('div', 'uf-diagnostics-body'));
+        diagnostics.addEventListener('toggle', renderDiagnostics); controls.append(diagnostics);
     }
     if (!playerPanel?.root.isConnected || playerPanel.root.parentElement !== right) { playerPanel?.root.remove(); const root = node('section','rpg-framework-player'); root.id = 'rpg-framework-player'; more.before(root); playerPanel = roster(root,'right'); }
     let sceneScroll = document.getElementById('rpg-framework-scene-scroll');
@@ -74,6 +107,10 @@ function mount() {
     controls.querySelector('select').value = frameworkMode(getContext());
 }
 function renderFramework(state, info = {}) {
+    if (panelContext !== getContext().chatMetadata) {
+        playerPanel?.root.remove(); scenePanel?.root.remove(); playerPanel = null; scenePanel = null;
+        panelContext = getContext().chatMetadata;
+    }
     mount(); const active = frameworkChat.active();
     document.getElementById('rpg-companion-panel')?.classList.toggle('rpg-framework-active', active);
     preserveBalancedDice();
@@ -84,11 +121,13 @@ function renderFramework(state, info = {}) {
     scenePanel.render(sceneState);
     renderSceneImage();
     renderActionMessages();
+    const feedback = document.getElementById('rpg-framework-feedback');
+    if (feedback) feedback.textContent = info.message
+        ? text(`本轮提交已保存 · 版本 ${state.revision}（不代表剧情信息已全部记录）`,`Submitted data saved · revision ${state.revision} (narrative coverage is not verified)`)
+        : text(`当前记录 · 版本 ${state.revision}；是否完整仍取决于模型提交的内容。`,`Current record · revision ${state.revision}; coverage depends on the submitted data.`);
     if (info.message) {
         const index = getContext().chat.indexOf(info.message);
         if (index >= 0) updateMessageBlock(index, info.message);
-        const feedback = document.getElementById('rpg-framework-feedback');
-        if (feedback) feedback.textContent = text(`已保存 · 版本 ${state.revision}`,`Saved · revision ${state.revision}`);
         const battle = state.entities.find(e => encounterEntity(e) && !e.archived);
         if (battle && !frameworkChat.generation?.before.entities.some(e=>e.id===battle.id&&!e.archived)) {
             if (encounterMode() === 'auto') window.dispatchEvent(new Event('rpg-framework-open-encounter'));
@@ -96,6 +135,7 @@ function renderFramework(state, info = {}) {
         }
     }
     if (nativePanel && nativeModal?.modal.classList.contains('is-open')) renderFrameworkEncounter(nativeModal);
+    renderDiagnostics();
 }
 function begin(type, data, dryRun) {
     const ctx = getContext();

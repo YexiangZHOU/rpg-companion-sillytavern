@@ -1,6 +1,7 @@
 import { emptyFramework, cloneFramework, applyFrameworkTransaction } from './state.mjs';
 import { applyFrameworkReply, buildFrameworkInstructions } from './protocol.mjs';
 import { readFrameworkBranch, writeFrameworkSnapshot } from './snapshots.mjs';
+import { frameworkFailure } from './diagnostics.mjs';
 
 export const CHAT_FRAMEWORK_KEY = 'rpg_framework_v1';
 export function frameworkMode(context) {
@@ -17,8 +18,10 @@ const snapFor = m => (m.extra?.rpg_framework_swipes ?? m.swipe_info?.[m.swipe_id
 
 /** Dependency-injected chat lifecycle: no ST globals and no account-wide game state. */
 export class FrameworkChat {
-    constructor({ getContext, save, enabled = () => true, render = () => {}, report = () => {} }) {
+    constructor({ getContext, save, enabled = () => true, render = () => {}, report = () => {}, observe = () => {} }) {
         Object.assign(this, { getContext, save, enabled, render, report }); this.generation = null; this.serial = 0;
+        // Optional diagnostics must never change the transaction outcome.
+        this.observe = (...args) => { try { observe(...args); } catch { /* Diagnostics are best effort. */ } };
     }
     active() { return this.enabled() && frameworkMode(this.getContext()) === 'universal'; }
     state() { return readFrameworkBranch(this.getContext().chat ?? []); }
@@ -50,15 +53,16 @@ export class FrameworkChat {
         const ctx = this.getContext(), g = this.generation;
         if (!this.active() || !g || ctx.chatMetadata !== g.metadata || !validReply(message) || !ctx.chat.includes(message) || ctx.chat.indexOf(message) < g.start || g.handled.has(message)) return false;
         if (g.anchor && (!ctx.chat.includes(g.anchor) || g.anchor.mes !== g.anchorText)) return false;
-        if (this.saving) { this.report('数据正在保存，本轮更新请稍后重试'); return false; }
+        if (this.saving) { this.observe(message, { status: 'busy' }); this.report('数据正在保存，本轮更新请稍后重试'); return false; }
         const existing = snapFor(message);
         if (existing?.reply === message.mes) { g.handled.add(message); this.render(this.state()); return false; }
         // The pinned generation revision prevents an asynchronous reply overwriting manual edits.
         const before = readFrameworkBranch(ctx.chat.slice(0, ctx.chat.indexOf(message)));
-        if (JSON.stringify(before) !== JSON.stringify(g.before)) { this.report('生成期间数据已修改，本轮事务未覆盖最新记录'); return false; }
+        if (JSON.stringify(before) !== JSON.stringify(g.before)) { this.observe(message, { status: 'conflict' }); this.report('生成期间数据已修改，本轮事务未覆盖最新记录'); return false; }
+        let phase = 'apply';
         try {
             const result = applyFrameworkReply(message.mes, before);
-            if (!result.accepted) { g.handled.add(message); this.render(this.state()); return false; }
+            if (!result.accepted) { this.observe(message, { status: 'no_protocol', baseRevision: before.revision }); g.handled.add(message); this.render(this.state()); return false; }
             const original = { mes: message.mes, swipes: message.swipes ? [...message.swipes] : undefined, extra: message.extra ? cloneFramework(message.extra) : undefined, swipe_info: message.swipe_info ? cloneFramework(message.swipe_info) : undefined };
             const priorMode = ctx.chatMetadata[CHAT_FRAMEWORK_KEY];
             this.saving = true;
@@ -67,7 +71,9 @@ export class FrameworkChat {
                 if (message.swipes) message.swipes[message.swipe_id ?? 0] = result.visibleText;
                 writeFrameworkSnapshot(message, result.state);
                 ctx.chatMetadata[CHAT_FRAMEWORK_KEY] = { ...(priorMode ?? {}), mode: 'universal' };
+                phase = 'save';
                 await this.save();
+                this.observe(message, { status: 'accepted', baseRevision: before.revision, revision: result.state.revision });
                 if (this.getContext().chatMetadata !== ctx.chatMetadata) { g.handled.add(message); return true; }
             } catch (error) {
                 for (const key of ['mes','swipes','extra','swipe_info']) { if (original[key] === undefined) delete message[key]; else message[key] = original[key]; }
@@ -75,7 +81,10 @@ export class FrameworkChat {
                 throw error;
             } finally { this.saving = false; }
             g.handled.add(message); this.render(result.state, { message, changes: result.changes }); return true;
-        } catch (error) { this.report(`游戏数据未提交：${String(error.message).slice(0, 180)}`); return false; }
+        } catch (error) {
+            this.observe(message, { ...(phase === 'save' ? { status: 'save_failed', code: 'save_readback' } : frameworkFailure(error)), baseRevision: before.revision });
+            this.report(phase === 'save' ? '保存或回读失败，服务器结果尚未确认；请查看诊断记录。' : `游戏数据未提交：${String(error.message).slice(0, 180)}`); return false;
+        }
     }
     async manual(ops) {
         if (this.saving) throw Error('数据正在保存，请稍后重试');
