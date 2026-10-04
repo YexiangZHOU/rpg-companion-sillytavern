@@ -62,7 +62,12 @@ export class FrameworkChat {
         let phase = 'apply';
         try {
             const result = applyFrameworkReply(message.mes, before);
-            if (!result.accepted) { this.observe(message, { status: 'no_protocol', baseRevision: before.revision }); g.handled.add(message); this.render(this.state()); return false; }
+            if (!result.accepted) {
+                this.observe(message, { status: 'no_protocol', ...result.diagnostic, baseRevision: before.revision });
+                g.handled.add(message); this.render(this.state());
+                if (result.diagnostic) this.report('检测到示例、引用或代码块内的框架标签；这些内容未作为更新执行，请查看数据更新诊断。');
+                return false;
+            }
             const original = { mes: message.mes, swipes: message.swipes ? [...message.swipes] : undefined, extra: message.extra ? cloneFramework(message.extra) : undefined, swipe_info: message.swipe_info ? cloneFramework(message.swipe_info) : undefined };
             const priorMode = ctx.chatMetadata[CHAT_FRAMEWORK_KEY];
             this.saving = true;

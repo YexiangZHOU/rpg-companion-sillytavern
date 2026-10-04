@@ -1,6 +1,11 @@
 import { emptyFramework, validateFramework, FrameworkError } from './state.mjs';
 import { applyFrameworkReply, FrameworkProtocolError } from './protocol.mjs';
 
+/** A review hint, never an inferred scene transition or a state mutation. */
+export function frameworkSceneWarnings(state) {
+    return state.entities.filter(e => e.kind === 'scene' && !e.archived).length > 1 ? ['multiple_active_scenes'] : [];
+}
+
 /** Only fixed codes enter diagnostics; provider errors, prompts and credentials do not. */
 export function frameworkFailure(error) {
     if (error instanceof FrameworkProtocolError) return { status: 'parse_rejected', code: error.code };
@@ -36,14 +41,14 @@ export function reviewFrameworkChat(messages, observations, limit = 100) {
             try {
                 if (snapshot.protocol !== 1) throw Error('version');
                 validateFramework(snapshot.state); state = snapshot.state; baselineKnown = true;
-                Object.assign(row, { status: 'snapshot', basis: 'saved_snapshot', revision: state.revision });
+                Object.assign(row, { status: 'snapshot', basis: 'saved_snapshot', revision: state.revision, warnings: frameworkSceneWarnings(state) });
             } catch { baselineKnown = false; Object.assign(row, { status: 'invalid_snapshot', basis: 'replay', code: 'snapshot' }); }
         } else if (observed) Object.assign(row, observed, { basis: 'observed_this_page' });
         else if (!baselineKnown) Object.assign(row, { status: 'unknown_baseline', basis: 'replay' });
         else {
             try {
                 const result = applyFrameworkReply(message.mes, state);
-                Object.assign(row, { status: result.accepted ? 'valid_uncommitted' : 'no_protocol', basis: 'replay' });
+                Object.assign(row, { status: result.accepted ? 'valid_uncommitted' : 'no_protocol', ...result.diagnostic, basis: 'replay', warnings: frameworkSceneWarnings(result.state) });
             } catch (error) { Object.assign(row, frameworkFailure(error), { basis: 'replay' }); }
         }
         rows.push(row);
@@ -55,6 +60,7 @@ export function frameworkDiagnosticLabel(row, zh = true) {
     const labels = {
         snapshot: ['已有保存快照', 'Saved snapshot'], accepted: ['保存并回读通过', 'Saved and verified'],
         no_protocol: ['本轮未提交框架数据（可能没有变化）', 'No framework data (possibly no change)'],
+        ignored_protocol: ['框架标签位于示例、引用或代码块，未执行', 'Framework tags in an example, quote or code block; not executed'],
         parse_rejected: ['协议 / JSON 解析失败', 'Protocol / JSON parse failed'], validation_rejected: ['数据校验拒绝', 'Data validation rejected'],
         save_failed: ['保存或回读失败，服务器结果未确认', 'Save or readback failed; server result unknown'],
         conflict: ['生成期间数据变化，拒绝覆盖', 'Concurrent change; overwrite rejected'],

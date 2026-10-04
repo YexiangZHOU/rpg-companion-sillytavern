@@ -1,11 +1,9 @@
 /** Display-only extraction. It never repairs, executes or commits a transaction. */
+import { frameworkVisibleText } from './textContext.mjs';
+
 export function frameworkDisplayBlocks(raw) {
     if (typeof raw !== 'string' || raw.length > 1500000) return [];
-    let fenced = false;
-    const masked = raw.split(/(?<=\n)/).map(line => {
-        if (/^\s*(?:```|~~~)/.test(line)) { fenced = !fenced; return line.replace(/[^\n]/g, ' '); }
-        return fenced || /^\s*>/.test(line) ? line.replace(/[^\n]/g, ' ') : line.replace(/(`+).*?\1/g, m => m.replace(/[^\n]/g, ' '));
-    }).join('');
+    const masked = frameworkVisibleText(raw);
     const blocks = [];
     let consumed = 0;
     for (const match of masked.matchAll(/<rpg-framework>/g)) {

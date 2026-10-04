@@ -1,12 +1,12 @@
 {
   "name": "rpg-complanion-sillytavern",
-  "version": "3.7.8",
+  "version": "3.7.9",
   "description": "",
   "main": "index.js",
   "scripts": {
     "validate_locale": "node src/i18n/validator.js --watch",
     "validate_locale_once": "node src/i18n/validator.js",
-    "test:framework": "node --test test/framework-state.test.mjs test/framework-chat.test.mjs test/framework-presentation.test.mjs test/framework-text-list.test.mjs test/framework-review.test.mjs",
+    "test:framework": "node --test test/framework-state.test.mjs test/framework-chat.test.mjs test/framework-presentation.test.mjs test/framework-text-list.test.mjs test/framework-review.test.mjs test/framework-boundaries.test.mjs",
     "preview:framework": "node examples/universal-rpg/build-preview.mjs"
   },
   "keywords": [],

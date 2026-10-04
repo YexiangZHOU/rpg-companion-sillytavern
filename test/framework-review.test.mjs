@@ -7,7 +7,7 @@ import { FrameworkObservations, reviewFrameworkChat } from '../src/framework/dia
 import { writeFrameworkSnapshot } from '../src/framework/snapshots.mjs';
 import { gameSummaryFields } from '../src/framework/panel.mjs';
 
-const examples = () => buildFrameworkInstructions().split('\n').filter(line => line.includes('示例：') || line.includes('交互）：')).map(line => JSON.parse(line.slice(line.indexOf('{'))));
+const examples = () => [...buildFrameworkInstructions().matchAll(/<rpg-framework>\n(.*?)\n<\/rpg-framework>/g)].map(match => JSON.parse(match[1]));
 const wrap = value => `<rpg-framework>${typeof value === 'string' ? value : JSON.stringify(value)}</rpg-framework>`;
 const message = mes => ({ mes, is_user: false, swipe_id: 0, swipes: [mes], swipe_info: [{ extra: {} }] });
 
@@ -19,6 +19,8 @@ test('published examples are complete executable multi-entity transactions', () 
     assert.equal(after.values.cargo[0].values.quantity, 2);
     assert.match(after.entities.find(e => e.id === 'place').description, /ferry/);
     assert.equal(after.entities.find(e => e.id === 'clerk').kind, 'npc');
+    assert.equal(after.entities.find(e => e.id === 'keeper').archived, true);
+    assert.deepEqual(after.entities.filter(e => e.kind === 'scene' && !e.archived).map(e => e.id), ['place']);
     assert.equal(before.values.coins, 20);
     const next = applyFrameworkTransaction(after, {protocol:1,id:'next',baseRevision:2,ops:[
         {op:'upsertItem',fieldId:'cargo',item:{id:'parcel',values:{quantity:1}}},

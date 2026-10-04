@@ -10,3 +10,5 @@
 .rpg-framework-active .rpg-action-button{background:var(--SmartThemeBlurTintColor,transparent);border-color:var(--SmartThemeBorderColor,currentColor);color:var(--SmartThemeBodyColor,inherit);font-family:inherit}
 .rpg-framework-scroll{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--SmartThemeBodyColor,currentColor) 35%,transparent) transparent}
 .uf-diagnostics-body{max-height:50vh;overflow:auto;font-size:12px;overflow-wrap:anywhere}.uf-diagnostics-body p{margin:5px 0}.uf-diagnostic-row{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:6px 0;border-bottom:1px solid var(--SmartThemeBorderColor)}.uf-diagnostic-row .menu_button,.uf-diagnostics-body>.menu_button{width:auto;font:inherit;margin:2px 0}
+
+.uf-scene-warning{font-size:12px;line-height:1.4;margin:4px 0;padding:6px;border:1px solid var(--SmartThemeBorderColor);border-radius:5px;color:var(--SmartThemeBodyColor);overflow-wrap:anywhere}

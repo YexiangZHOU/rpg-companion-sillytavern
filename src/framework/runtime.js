@@ -17,7 +17,7 @@ import { encounterModal } from '../systems/ui/encounterUI.js';
 import { preserveBalancedDice } from '../systems/ui/balancedLayout.js';
 import { protocolVisibleText } from '../systems/features/diceEngine.mjs';
 import { withAvatarJob } from '../systems/features/avatarQueue.mjs';
-import { FrameworkObservations, reviewFrameworkChat, frameworkDiagnosticLabel } from './diagnostics.mjs';
+import { FrameworkObservations, reviewFrameworkChat, frameworkDiagnosticLabel, frameworkSceneWarnings } from './diagnostics.mjs';
 
 let initialized = false, playerPanel, scenePanel, nativePanel, nativeModal, timer, observer, frame, panelContext;
 const portraitBusy = new WeakSet();
@@ -49,6 +49,7 @@ function renderDiagnostics() {
         item.append(node('strong', '', `#${row.message} · ${frameworkDiagnosticLabel(row, zh())}`));
         const basis = row.basis === 'saved_snapshot' ? text('保存快照', 'Saved snapshot') : row.basis === 'observed_this_page' ? text('本页面现场记录（刷新即失）', 'Live observation (lost on reload)') : text('重新校验，非历史日志', 'Replay, not a historical log');
         item.append(node('small', '', `${basis}${row.code ? ` · ${row.code}` : ''}${row.revision != null ? ` · v${row.revision}` : ''}${row.at ? ` · ${row.at}` : ''}`));
+        if (row.warnings?.includes('multiple_active_scenes')) item.append(node('small', '', text('该记录含多个未归档场景；请核对当前地点。','This record contains multiple active scenes; check the current location.')));
         const locate = node('button', 'menu_button', text('定位回复', 'Locate reply')); locate.type = 'button';
         locate.addEventListener('click', () => {
             const message = document.querySelector(`#chat .mes[mesid="${row.message - 1}"]`);
@@ -119,6 +120,10 @@ function renderFramework(state, info = {}) {
     const sceneState = view(state, leftEntity);
     sceneState.entities = [...sceneState.entities].sort((a,b) => Number(sceneEntity(b)) - Number(sceneEntity(a)));
     scenePanel.render(sceneState);
+    if (frameworkSceneWarnings(state).length) {
+        const warning = node('p', 'uf-scene-warning', text('记录中有多个未归档场景，请核对当前地点；转场时应更新原场景或归档旧场景。','Multiple scenes remain active. Check the current location; update the existing scene or archive the previous one when moving.'));
+        warning.setAttribute('role', 'status'); scenePanel.root.prepend(warning);
+    }
     renderSceneImage();
     renderActionMessages();
     const feedback = document.getElementById('rpg-framework-feedback');
