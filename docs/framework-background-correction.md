@@ -23,3 +23,6 @@ Type errors expose a bounded operation index and field ID/type. Per-swipe correc
 The extension can reject invalid operations, but a syntactically valid correction is not proof of narrative fidelity. Inspect the corrected values when the game outcome matters. Missing protocol alone does not trigger another paid request. This release does not implement the separate scene/appearance completeness or generalized media design.
 
 Tests use fake providers to count requests and cover correction, locks, cancellation, concurrent changes, branch identity, uncertain persistence and collection lifecycle. Local runtime previews use synthetic data and mocked network/storage; live provider compatibility still requires deployment acceptance.
+# Follow-up
+
+Version 3.7.11 adds the visual declarations and explicit coverage-completion route described in [framework-media.md](framework-media.md). The original correction behavior below remains limited to rejected transactions; missing coverage is not an automatic retry loop.

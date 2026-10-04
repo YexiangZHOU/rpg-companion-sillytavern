@@ -14,3 +14,12 @@
 .uf-scene-warning{font-size:12px;line-height:1.4;margin:4px 0;padding:6px;border:1px solid var(--SmartThemeBorderColor);border-radius:5px;color:var(--SmartThemeBodyColor);overflow-wrap:anywhere}
 .uf-repair-status{display:none}.rpg-framework-active .uf-repair-status:not(:empty){display:flex;align-items:center;flex-wrap:wrap;gap:5px;padding:4px 6px;font:inherit;font-size:12px;color:var(--SmartThemeBodyColor)}
 .uf-repair-status .menu_button{width:auto;white-space:nowrap;font:inherit;margin:0;padding:3px 6px}.uf-diagnostic-row details{max-width:100%;width:100%}.uf-diagnostic-row pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:11px}
+.uf-media-controls { display:inline-flex; align-items:center; flex-wrap:wrap; gap:3px; margin-inline-start:4px; vertical-align:middle; }
+.uf-media-controls .uf-media-state { font-size:0.75rem; opacity:0.7; }
+.uf-media-controls .uf-subtle { padding:1px 4px; min-height:0; font-size:0.72rem; }
+.uf-media-icon { width:24px; height:24px; object-fit:contain; border-radius:3px; }
+.uf-media-dialog { background:var(--SmartThemeBlurTintColor); color:var(--SmartThemeBodyColor); border:1px solid var(--SmartThemeBorderColor); max-width:90vw; }
+.uf-media-dialog img { display:block; max-width:80vw; max-height:75vh; object-fit:contain; }
+.uf-coverage { margin:4px 0; padding:4px 6px; border:1px solid var(--SmartThemeBorderColor); border-radius:6px; font-size:0.8rem; }
+.uf-coverage > small { display:block; padding:2px 0; overflow-wrap:anywhere; }
+#rpg-companion-panel:not(.rpg-framework-active) .uf-coverage { display:none; }

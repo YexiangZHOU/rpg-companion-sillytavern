@@ -9,6 +9,8 @@ export async function saveFrameworkVerified(context, transport = fetch) {
     const project = (messages, metadata) => ({
         mode: metadata?.[CHAT_FRAMEWORK_KEY]?.mode ?? null,
         repairAttempts: metadata?.[CHAT_FRAMEWORK_KEY]?.repairAttempts ?? null,
+        mediaMode: metadata?.[CHAT_FRAMEWORK_KEY]?.mediaMode ?? null,
+        media: messages.map(m=>m.extra?.rpg_framework_media ?? m.swipe_info?.[m.swipe_id??0]?.extra?.rpg_framework_media ?? null),
         messages: messages.map(m => ({ reply: m.mes, swipe: m.swipe_id ?? 0, data: m.extra?.rpg_framework_swipes ?? m.swipe_info?.[m.swipe_id ?? 0]?.extra?.rpg_framework_swipes ?? null, portraits: m.extra?.rpg_framework_portraits ?? m.swipe_info?.[m.swipe_id ?? 0]?.extra?.rpg_framework_portraits ?? null, repairs: m.extra?.rpg_framework_repairs ?? m.swipe_info?.[m.swipe_id ?? 0]?.extra?.rpg_framework_repairs ?? null })),
     });
     const expected = cloneFramework(project(context.chat,context.chatMetadata));

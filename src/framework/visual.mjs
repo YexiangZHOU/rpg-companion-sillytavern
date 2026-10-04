@@ -1,16 +1,18 @@
-import { activeFrameworkFields, activeFrameworkGroups } from './state.mjs';
 import { protocolVisibleText } from '../systems/features/diceEngine.mjs';
+import { appearanceText, entityFields } from './media.mjs';
 /** Public visual descriptions only; never private thoughts or unrelated numeric rules. */
 export function entityAppearance(state, entity) {
-    const fields = activeFrameworkGroups(state,entity.id).flatMap(g => activeFrameworkFields(state,g.id));
-    return fields.filter(f => f.type === 'text' && /^(外观|相貌|外貌|appearance)$/i.test(f.label.trim())).map(f => state.values[f.id]).filter(v => typeof v === 'string' && v.trim()).join('; ').slice(0,2400);
+    return appearanceText(state,entity);
 }
 export function frameworkVisual(state, summary = '') {
     const entities = state.entities.filter(e => !e.archived);
     const scene = entities.find(e => e.kind === 'scene');
-    const cast = entities.filter(e => ['player','npc'].includes(e.kind)).map(e => ({ name:e.label,appearance:entityAppearance(state,e),visibleAction:e.description ?? '' }));
-    const player = cast.find(c => entities.find(e => e.label === c.name)?.kind === 'player') ?? null;
-    return { location:scene?.description || scene?.label || '',weather:{},time:{},cast,player,summary };
+    const publicValue = (entity,role) => entity ? entityFields(state,entity).filter(f=>f.role===role&&['text','choice','number'].includes(f.type)).map(f=>state.values[f.id]).filter(v=>v!=null&&v!=='').join('; ') : '';
+    const subjects = entities.filter(e => e.visual?.visible !== false && (['player','npc'].includes(e.kind) || e.visual?.visible === true));
+    const cast = subjects.map(e => ({ name:e.label,appearance:entityAppearance(state,e),visibleAction:publicValue(e,'action')||e.description||'' }));
+    const player = cast[subjects.findIndex(e=>e.kind==='player')] ?? null;
+    const weather=publicValue(scene,'weather'),time=publicValue(scene,'time');
+    return { location:publicValue(scene,'location')||scene?.description||scene?.label||'',weather:weather?{condition:weather}:{},time:time?{display:time}:{},cast,player,summary:summary||publicValue(scene,'action')||scene?.description||'' };
 }
 export function stripAcceptedPortraits(raw, message) {
     const swipe=message.swipe_id??0;

@@ -1,4 +1,5 @@
 import { activeFrameworkGroups, activeFrameworkFields, isFrameworkLocked } from './state.mjs';
+import { appearanceField, appearanceText } from './media.mjs';
 
 const panelStrings = {
     zh: { empty: '游戏数据尚未初始化', emptyHint: '开始游戏后，模型会按当前设定建立需要记录的信息。', unknown: '未记录', emptyValue: '（空）', yes: '是', no: '否', items: '项', archive: '归档', archived: '已归档', restore: '恢复', edit: '编辑', settings: '字段设置', save: '保存', cancel: '取消', label: '名称', description: '说明', unit: '单位', summary: '显示在摘要', value: '值', maximum: '上限', add: '添加条目', rename: '重命名', struct: '结构锁', lock: '数值锁', lockedHint: '锁定后模型不能修改；玩家仍可手动编辑', restoreHint: '本组没有可见字段', details: '详情', actor: '查看对象' },
@@ -28,8 +29,8 @@ export function gameSummaryFields(state, entity, appearance = []) {
 }
 
 export class FrameworkPanel {
-    constructor(root, { onOperation, language = 'zh', getPortrait, presentation = 'editor', onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait } = {}) {
-        Object.assign(this, { root, onOperation, getPortrait, presentation, onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait }); this.strings = panelStrings[language] ?? panelStrings.zh;
+    constructor(root, { onOperation, language = 'zh', getPortrait, presentation = 'editor', onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia } = {}) {
+        Object.assign(this, { root, onOperation, getPortrait, presentation, onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia }); this.strings = panelStrings[language] ?? panelStrings.zh;
         this.entityId = null; this.selected = new Map(); this.opened = new Map(); this.scrollPositions = new Map(); this.renderedGroup = null; this.serial = 0;
         root.classList.add('uf-panel');
     }
@@ -144,7 +145,7 @@ export class FrameworkPanel {
         const actions = node('div', 'uf-entity-actions');
         const editing = button(zh ? '编辑' : 'Edit', () => { this.editing = !this.editing; this.render(this.state); }, 'uf-subtle');
         editing.dataset.focus = `edit_${entity.id}`; editing.setAttribute('aria-pressed', String(!!this.editing)); actions.append(editing);
-        if (this.onPortrait && entity.kind !== 'scene' && entity.kind !== 'encounter') {
+        if (this.onPortrait && !this.renderMedia && entity.kind !== 'scene' && entity.kind !== 'encounter') {
             actions.append(button(zh ? '生成头像' : 'Portrait', () => this.onPortrait(entity.id), 'uf-subtle'));
             if (this.hasGeneratedPortrait?.(entity.id)) {
                 const locked = !!this.isPortraitLocked?.(entity.id);
@@ -153,12 +154,14 @@ export class FrameworkPanel {
             }
         }
         names.append(actions); identity.append(names); header.append(identity);
+        this.renderMedia?.(header, `entity:${entity.id}`, true);
         // Public description stays above appearance; it is not an inferred thought.
         if (entity.description) header.append(node('p', 'uf-description uf-entity-description', entity.description));
         this.root.append(header);
         const groups = activeFrameworkGroups(state, entity.id);
-        const appearance = groups.flatMap(g => activeFrameworkFields(state, g.id)).filter(f => f.type === 'text' && /^(?:外观|相貌|外貌|appearance)$/i.test(f.label.trim()));
+        const appearance = groups.flatMap(g => activeFrameworkFields(state, g.id)).filter(appearanceField);
         if (appearance.length) { const section = node('div', 'uf-appearance'); for (const field of appearance) section.append(this.fieldView(field)); this.root.append(section); }
+        else if (appearanceText(state,entity)) { const detail=this.details(`appearance_${entity.id}`,zh?'外观':'Appearance');detail.dataset.detail=`appearance_${entity.id}`;detail.append(node('p','uf-description',appearanceText(state,entity)));this.root.append(detail); }
         const summaryFields = gameSummaryFields(state, entity, appearance);
         if (summaryFields.length) { const summaries = node('div','uf-game-summaries'); summaryFields.forEach(f => summaries.append(this.fieldView(f, true))); this.root.append(summaries); }
         const content = node('section', 'uf-content');
@@ -176,6 +179,7 @@ export class FrameworkPanel {
             const fields = activeFrameworkFields(state, group.id).filter(f => !appearance.includes(f) && (this.editing || !summaryFields.includes(f)));
             if (!fields.length && !this.editing) continue;
             const section = this.details(`game_group_${group.id}`, group.label); section.classList.add('uf-group'); section.dataset.detail = `game_group_${group.id}`;
+            this.renderMedia?.(section.querySelector('summary'), `group:${group.id}`);
             section.open = this.opened.get(section.dataset.detail) ?? (visibleGroups === 0 || entity.kind === 'npc' || entity.kind === 'scene');
             visibleGroups++;
             if (group.description) section.append(node('p', 'uf-description', group.description));
@@ -196,6 +200,7 @@ export class FrameworkPanel {
         const t = this.strings, value = this.state.values[field.id] ?? null;
         const wrapper = node('div', `uf-field uf-type-${field.type}${compact ? ' is-summary' : ''}`);
         const label = node('div', 'uf-field-label', field.label);
+        this.renderMedia?.(label, `field:${field.id}`);
         if (isFrameworkLocked(this.state, 'field', field.id, 'value')) { const lock = node('span', 'uf-lock-indicator', '●'); lock.title = t.lockedHint; label.append(lock); }
         wrapper.append(label);
         if (!compact && field.type === 'collection' && value !== null) {
@@ -203,6 +208,7 @@ export class FrameworkPanel {
             for (const item of value.filter(item => !item.archived)) {
                 const first = field.columns[0];
                 const detail = this.details(`item_${field.id}_${item.id}`, this.format(item.values[first.id])); detail.dataset.detail = `item_${field.id}_${item.id}`;
+                this.renderMedia?.(detail.querySelector('summary'), `item:${field.id}:${item.id}`);
                 const cells = node('dl', 'uf-item-values');
                 for (const column of field.columns) { cells.append(node('dt', '', column.label), node('dd', '', this.format(item.values[column.id]) + (column.unit ? ` ${column.unit}` : ''))); }
                 detail.append(cells, button(t.edit, () => this.editItem(field, item), 'uf-subtle'));

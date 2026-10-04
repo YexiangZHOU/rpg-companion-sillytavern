@@ -44,7 +44,17 @@ function sequence(value, maximum) { if (!Array.isArray(value) || value.length > 
 function order(value) { if (!Number.isInteger(value) || value < 0 || value > 10000) fail('order', '排序值不合法'); return value; }
 function unique(values) { if (new Set(values).size !== values.length) fail('duplicate', '存在重复编号或选项'); }
 
-const definitionKeys = ['id', 'label', 'description', 'type', 'unit', 'min', 'max', 'integer', 'options', 'columns', 'summary', 'order', 'groupId', 'archived'];
+/** Presentation intent is data, never a URL, provider option or executable code. */
+function visualDefinition(raw) {
+    keys(raw, ['mode', 'subject', 'description', 'pending', 'visible']);
+    if (!['portrait', 'icon', 'none'].includes(raw.mode)) fail('visual', '配图类型须为portrait/icon/none');
+    if (own(raw, 'subject') && !['person', 'creature', 'object', 'place', 'symbol'].includes(raw.subject)) fail('visual', '配图主体类型无效');
+    if (own(raw, 'description')) string(raw.description, 2400, true);
+    if (own(raw, 'pending')) string(raw.pending, 400);
+    if (own(raw, 'visible')) bool(raw.visible);
+    return cloneFramework(raw);
+}
+const definitionKeys = ['id', 'label', 'description', 'type', 'unit', 'min', 'max', 'integer', 'options', 'columns', 'summary', 'order', 'groupId', 'archived', 'role', 'visual'];
 function fieldDefinition(raw, column = false) {
     keys(raw, column ? ['id', 'label', 'description', 'type', 'unit', 'min', 'max', 'integer', 'options'] : definitionKeys);
     const result = { id: identifier(raw.id), label: string(raw.label), type: raw.type };
@@ -54,6 +64,11 @@ function fieldDefinition(raw, column = false) {
         result.order = order(raw.order ?? 0);
         result.summary = bool(raw.summary ?? false);
         result.archived = bool(raw.archived ?? false);
+        if (own(raw, 'visual')) result.visual = visualDefinition(raw.visual);
+        if (own(raw, 'role')) {
+            if (!['appearance', 'location', 'action', 'weather', 'time', 'private'].includes(raw.role)) fail('role', '展示语义无效');
+            result.role = raw.role;
+        }
     }
     if (own(raw, 'description')) result.description = string(raw.description, 2000, true);
     if (own(raw, 'unit')) result.unit = string(raw.unit, 40, true);
@@ -79,16 +94,18 @@ function fieldDefinition(raw, column = false) {
     return result;
 }
 function entityDefinition(raw) {
-    keys(raw, ['id', 'label', 'description', 'kind', 'archived']);
+    keys(raw, ['id', 'label', 'description', 'kind', 'archived', 'visual']);
     const result = { id: identifier(raw.id), label: string(raw.label), archived: bool(raw.archived ?? false) };
     if (own(raw, 'kind')) result.kind = string(raw.kind, 80);
+    if (own(raw, 'visual')) result.visual = visualDefinition(raw.visual);
     if (own(raw, 'description')) result.description = string(raw.description, 2000, true);
     return result;
 }
 function groupDefinition(raw) {
-    keys(raw, ['id', 'entityId', 'label', 'description', 'layout', 'order', 'archived']);
+    keys(raw, ['id', 'entityId', 'label', 'description', 'layout', 'order', 'archived', 'visual']);
     const result = { id: identifier(raw.id), entityId: identifier(raw.entityId), label: string(raw.label), layout: raw.layout ?? 'grid', order: order(raw.order ?? 0), archived: bool(raw.archived ?? false) };
     if (!['grid', 'list', 'details'].includes(result.layout)) fail('layout', '展示方式不支持');
+    if (own(raw, 'visual')) result.visual = visualDefinition(raw.visual);
     if (own(raw, 'description')) result.description = string(raw.description, 2000, true);
     return result;
 }
@@ -116,7 +133,8 @@ export function validateFieldValue(value, definition) {
             sequence(value, FRAMEWORK_LIMITS.items);
             unique(value.map(item => identifier(item.id)));
             for (const item of value) {
-                keys(item, ['id', 'values', 'archived']);
+                keys(item, ['id', 'values', 'archived', 'visual']);
+                if (own(item, 'visual')) visualDefinition(item.visual);
                 if (own(item, 'archived')) bool(item.archived);
                 if (!object(item.values) || Object.keys(item.values).some(key => !definition.columns.some(column => column.id === key))) fail('column', '条目引用了未定义字段');
                 for (const column of definition.columns) validateFieldValue(item.values[column.id] ?? null, column);
@@ -233,8 +251,9 @@ export function applyFrameworkTransaction(previous, raw, { actor = 'model' } = {
             keys(op, ['op', 'target', 'id', 'patch']); identifier(op.id);
             const old = locate(state, op.target, op.id);
             available(state, op.target, op.id); unlocked(state, op.target, op.id, 'structure', actor);
-            const allowed = { entity: ['label', 'kind', 'description'], group: ['label', 'description', 'layout', 'order'], field: ['label', 'description', 'groupId', 'unit', 'min', 'max', 'integer', 'options', 'columns', 'summary', 'order'] }[op.target];
+            const allowed = { entity: ['label', 'kind', 'description', 'visual'], group: ['label', 'description', 'layout', 'order', 'visual'], field: ['label', 'description', 'groupId', 'unit', 'min', 'max', 'integer', 'options', 'columns', 'summary', 'order', 'role', 'visual'] }[op.target];
             keys(op.patch, allowed);
+            if (own(op.patch, 'visual')) unlocked(state, op.target, op.id, 'value', actor);
             if (op.target === 'field' && own(op.patch, 'columns')) {
                 if (old.type !== 'collection') fail('type', '只有集合可以定义条目字段');
                 sequence(op.patch.columns, FRAMEWORK_LIMITS.columns);
@@ -285,11 +304,13 @@ export function applyFrameworkTransaction(previous, raw, { actor = 'model' } = {
                 if (field.type !== 'collection') fail('collection', '此字段不是集合');
                 state.values[field.id] ??= [];
                 if (op.op === 'upsertItem') {
-                    keys(op.item, ['id', 'values']); identifier(op.item.id);
+                    keys(op.item, ['id', 'values', 'visual']); identifier(op.item.id);
+                    if (own(op.item, 'visual')) unlocked(state, 'field', field.id, 'structure', actor);
                     if (!object(op.item.values)) fail('shape', '条目值须为对象');
                     const old = state.values[field.id].find(item => item.id === op.item.id);
                     if (old?.archived) fail('archived', '条目已归档，请先恢复');
                     const item = { id: op.item.id, values: { ...(old?.values ?? {}), ...cloneFramework(op.item.values) } };
+                    if (own(op.item, 'visual')) item.visual = visualDefinition(op.item.visual);
                     if (old) Object.assign(old, item); else state.values[field.id].push(item);
                 } else {
                     identifier(op.itemId); bool(op.archived);

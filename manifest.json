@@ -1,11 +1,11 @@
 {
-    "display_name": "RPG Companion",
-    "loading_order": 100,
-    "requires": [],
-    "optional": [],
-    "js": "index.js",
-    "css": "style.css",
-    "author": "Marinara",
-    "version": "3.7.10",
-    "homePage": "https://github.com/YexiangZHOU/rpg-companion-sillytavern"
+  "display_name": "RPG Companion",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Marinara",
+  "version": "3.7.11",
+  "homePage": "https://github.com/YexiangZHOU/rpg-companion-sillytavern"
 }

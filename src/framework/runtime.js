@@ -11,17 +11,17 @@ import { actionPreference } from '../systems/features/actionStore.js';
 import { setDiceReplyHandler } from '../systems/features/diceRequests.js';
 import { renderSceneImage, acceptSceneRequest, sceneImageMode } from '../systems/features/sceneImage.js';
 import { saveFrameworkVerified } from './storage.mjs';
-import { entityAppearance } from './visual.mjs';
 import { SlashCommandParser } from '../../../../../slash-commands/SlashCommandParser.js';
 import { encounterModal } from '../systems/ui/encounterUI.js';
 import { preserveBalancedDice } from '../systems/ui/balancedLayout.js';
-import { protocolVisibleText } from '../systems/features/diceEngine.mjs';
 import { withAvatarJob } from '../systems/features/avatarQueue.mjs';
 import { FrameworkObservations, reviewFrameworkChat, frameworkDiagnosticLabel, frameworkSceneWarnings } from './diagnostics.mjs';
 import { readRepair } from './repair.mjs';
+import { FrameworkMedia, mediaTargets, readMedia, safeMediaUrl, coverageIssues } from './media.mjs';
 
 let initialized = false, playerPanel, scenePanel, nativePanel, nativeModal, timer, observer, frame, panelContext;
-const portraitBusy = new WeakSet();
+let mediaView = new Map();
+
 const visualsSeen = new WeakMap();
 const node = (tag, cls, text) => { const e = document.createElement(tag); e.className = cls; if (text) e.textContent = text; return e; };
 const zh = () => i18n.currentLanguage.startsWith('zh');
@@ -34,7 +34,7 @@ export const frameworkChat = new FrameworkChat({ getContext, save, enabled: () =
     // Call once directly; the generic wrapper can issue an unbudgeted fallback.
     generateRepair: prompt => generateRaw({ prompt, quietToLoud: false, responseLength: 4096, trimNames: false }),
     repairLimit: () => getContext().chatMetadata?.rpg_framework_v1?.repairAttempts ?? 2,
-    repairStatus: () => { renderRepairStatus(); renderDiagnostics(); },
+    repairStatus: () => { if(playerPanel)renderFramework(frameworkChat.state());else {renderRepairStatus();renderDiagnostics();} },
 });
 
 function renderRepairStatus() {
@@ -50,13 +50,13 @@ function renderRepairStatus() {
     if (!repair) return;
     if (frameworkChat.uncertainSaves.has(message)) { host.append(node('small','',text('保存结果尚未确认；请重新加载聊天核实，暂不重复纠错。','Save status is uncertain. Reload the chat to verify before retrying.'))); return; }
     host.append(node('small', '', repair.status === 'corrected'
-        ? text(`面板数据已自动修正 · ${repair.attempts.length} 次请求`, `Panel data corrected · ${repair.attempts.length} requests`)
-        : text('面板纠错未完成，仍使用之前的数据。', 'Correction incomplete; the previous data remains active.')));
+        ? repair.purpose==='coverage' ? text('补齐提交已保存；请查看是否还有缺项。','Completion saved; check for any remaining gaps.') : text(`面板数据已自动修正 · ${repair.attempts.length} 次请求`, `Panel data corrected · ${repair.attempts.length} requests`)
+        : text('面板纠错或补齐未完成，仍使用之前的数据。', 'Correction or completion incomplete; the previous data remains active.')));
     if (repair.status !== 'corrected') {
         const retry = node('button', 'menu_button', text('重新纠错', 'Retry correction')); retry.type = 'button';
         retry.disabled = !!frameworkChat.repairJob || is_send_press;
         retry.title = text('额外请求模型，最多两次；不会添加玩家发言。','Requests up to two additional model calls without a player message.');
-        retry.addEventListener('click', () => { if (!is_send_press) void frameworkChat.retryRepair(message); }); host.append(retry);
+        retry.addEventListener('click', () => { if (!is_send_press) void (repair.purpose==='coverage'?frameworkChat.completeMissing():frameworkChat.retryRepair(message)); }); host.append(retry);
     }
 }
 
@@ -106,20 +106,76 @@ export const currentFrameworkState = () => frameworkChat.state();
 const sceneEntity = e => e.kind === 'scene';
 const leftEntity = e => sceneEntity(e) || e.kind === 'npc';
 const encounterEntity = e => e.kind === 'encounter';
-const portraitMode = () => actionPreference('portraitMode',extensionSettings.playerPortraitMode??'manual');
+const portraitMode = () => getContext().chatMetadata?.rpg_framework_v1?.mediaMode ?? actionPreference('portraitMode',extensionSettings.playerPortraitMode??'manual');
+export const frameworkMedia = new FrameworkMedia({
+    getContext, state:()=>frameworkChat.state(), active:()=>frameworkChat.active(), mode:portraitMode,
+    blocked:()=>!!(is_send_press||frameworkChat.saving||frameworkChat.repairJob),
+    generate:(prompt,valid)=>withAvatarJob(async()=>{
+        const command=SlashCommandParser.commands?.sd??SlashCommandParser.commands?.imagine;
+        if(!command?.callback)throw Error('Native image module unavailable');
+        const result=await command.callback({quiet:'true',extend:'false',gallery:'false'},prompt);
+        return typeof result==='string'?result:result?.pipe;
+    },valid),
+    persist:async()=>{frameworkChat.saving=true;try{await save();}finally{frameworkChat.saving=false;}},
+    render:()=>renderFramework(frameworkChat.state()),
+});
+function renderMediaTarget(host,key,entity=false) {
+    const target=mediaView.get(key);if(!target)return;
+    const entry=readMedia(getContext().chat)[key],busy=frameworkMedia.job?.key===key;
+    const wrap=node('span','uf-media-controls');
+    if(!entity&&safeMediaUrl(entry?.url)){
+        const img=node('img','uf-media-icon');img.src=entry.url;img.alt=target.label;img.loading='lazy';
+        img.addEventListener('error',()=>img.remove(),{once:true});wrap.append(img);
+    }
+    const stale=entry?.url&&(entry.imageFingerprint??entry.fingerprint)!==target.fingerprint;
+    const status=busy?text('生成中','Generating'):target.pending?text('外观待确认','Appearance pending')
+        :target.locked||entry?.locked?text('已锁定','Locked'):portraitMode()==='off'?text('生成关闭','Disabled')
+        :entry?.status==='failed'?text('生成失败','Failed'):entry?.status==='requesting'?text('上次未完成','Interrupted')
+        :stale?text('外观已变化','Appearance changed'):entry?.url?text('已生成','Generated')
+        :portraitMode()==='proposal'?text('建议生成','Proposed'):text('待生成','Pending');
+    const label=node('small','uf-media-state',status);label.title=target.pending||target.description;wrap.append(label);
+    const action=(cn,en,handler)=>{const b=node('button','uf-subtle',text(cn,en));b.type='button';b.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();b.disabled=true;try{await handler();}catch{report(text('配图操作未确认完成，请查看状态；必要时重载聊天核验。','Media operation was not confirmed; review the status and reload to verify if needed.'));}finally{b.disabled=false;}});wrap.append(b);return b;};
+    if(safeMediaUrl(entry?.url))action('查看','View',()=>{
+        const dialog=node('dialog','uf-media-dialog'),img=node('img','');img.src=entry.url;img.alt=target.label;
+        const close=node('button','menu_button',text('关闭','Close'));close.type='button';close.onclick=()=>dialog.close();
+        dialog.append(img,close);dialog.addEventListener('close',()=>dialog.remove(),{once:true});document.body.append(dialog);dialog.showModal();
+    });
+    const generate=action(entry?.url?'刷新':'生成',entry?.url?'Refresh':'Generate',()=>frameworkMedia.run(key,{refresh:true}));
+    generate.disabled=!!(target.pending||target.locked||entry?.locked||portraitMode()==='off'||frameworkMedia.job||is_send_press||frameworkChat.saving||frameworkChat.repairJob||frameworkMedia.uncertain.has(getContext().chat.at(-1)));
+    generate.title=text('使用原生绘图模块生成一张图片','Generate one image with the native image module');
+    if(entry?.url){const lock=action(entry.locked?'解锁':'锁图',entry.locked?'Unlock':'Lock',()=>frameworkMedia.toggleLock(key));lock.disabled=!!frameworkMedia.job;}
+    if(busy){const stop=action('停止','Stop',()=>frameworkMedia.cancel());stop.title=text('停止后续请求并丢弃返回结果；已发出的请求仍可能计费。','Stop further requests and discard pending output; an existing request may still be billed.');}
+    host.append(wrap);
+}
+function renderCoverage(state) {
+    let host=document.getElementById('rpg-framework-coverage');
+    if(!host){host=node('details','uf-coverage');host.id='rpg-framework-coverage';playerPanel.root.before(host);}
+    const missing=coverageIssues(state),pending=state.entities.filter(e=>!e.archived&&e.visual?.pending);
+    host.replaceChildren();host.hidden=!missing.length&&!pending.length;
+    host.append(node('summary','',text(`记录待补齐 ${missing.length} · 外观待确认 ${pending.length}`,`Missing records ${missing.length} · Deferred appearances ${pending.length}`)));
+    const labels={initialization:text('初始化','Initialization'),scene_missing:text('当前场景','Current scene'),scene_details:text('地点与动态','Location and activity'),appearance:text('外观','Appearance'),portrait_intent:text('头像意图','Portrait intent')};
+    for(const issue of missing)host.append(node('small','',`${issue.label} · ${labels[issue.code]}`));
+    for(const e of pending)host.append(node('small','',`${e.label} · ${e.visual.pending}`));
+    if(missing.length){
+        const button=node('button','menu_button',text('后台补齐缺项（1次文字请求）','Complete missing records (1 text request)'));button.type='button';
+        button.disabled=!!(is_send_press||frameworkChat.saving||frameworkChat.repairJob||frameworkMedia.job||!getContext().chat.at(-1)||getContext().chat.at(-1)?.is_user);
+        button.addEventListener('click',async()=>{button.disabled=true;try{if(!await frameworkChat.completeMissing())report(text('补齐未完成；请先处理未提交回复，并查看数据更新诊断。','Completion did not finish. Resolve any rejected reply and review diagnostics.'));}finally{renderFramework(frameworkChat.state());}});host.append(button);
+    }
+}
 const encounterMode = () => extensionSettings.encounterSettings?.enabled===false ? 'manual' : actionPreference('encounterMode',extensionSettings.modelEncounterMode??'proposal');
 function view(state, predicate) { return { ...state, entities: state.entities.filter(predicate) }; }
 function portrait(entity) {
     const ctx = getContext();
-    const stored = currentPortraits()[entity.id];
-    if (stored?.url) return stored.url;
+    const stored = readMedia(ctx.chat)[`entity:${entity.id}`] ?? currentPortraits()[entity.id];
+    if (entity.visual?.mode === 'none') return null;
+    if (safeMediaUrl(stored?.url)) return stored.url;
     if (entity.kind === 'player' && user_avatar) return getThumbnailUrl('persona', user_avatar);
     const character = ctx.characters?.find(c => c.name === entity.label);
     return character?.avatar ? ctx.getThumbnailUrl?.('avatar', character.avatar) : null;
 }
 function panel(root) { return new FrameworkPanel(root, { language: zh() ? 'zh' : 'en', getPortrait: portrait, onOperation: op => frameworkChat.manual([op]) }); }
 function roster(root, side) { return new FrameworkRoster(root, {
-    language: zh() ? 'zh' : 'en', side, getPortrait: portrait,
+    language: zh() ? 'zh' : 'en', side, getPortrait: portrait, renderMedia: renderMediaTarget,
     onOperation: op => frameworkChat.manual([op]), onPortrait: id => generateFrameworkPortrait(id),
     onPortraitLock: id => togglePortraitLock(id), isPortraitLocked: id => !!currentPortraits()[id]?.locked,
     hasGeneratedPortrait: id => !!currentPortraits()[id]?.url,
@@ -143,6 +199,11 @@ function mount() {
         for (const value of [0,1,2]) { const o = node('option','',value ? text(`最多 ${value} 次额外文字请求`,`Up to ${value} extra text requests`) : text('关闭','Off')); o.value = String(value); repairSelect.append(o); }
         repairSelect.addEventListener('change', async () => { repairSelect.disabled = true; try { await frameworkChat.setRepairLimit(Number(repairSelect.value)); } catch { report(text('纠错设置保存失败','Could not save correction settings')); } finally { repairSelect.value = String(frameworkChat.repairLimit()); repairSelect.disabled = false; } });
         repairLabel.append(repairSelect); controls.append(repairLabel);
+        const mediaLabel=node('label','',text('本聊天头像与图标','Chat portraits and icons')),mediaSelect=node('select','');mediaSelect.id='rpg-framework-media-mode';
+        for(const [value,cn,en] of [['manual','手动生成','Manual'],['proposal','列出提议，点击生成','Propose; click to generate'],['auto','自动（每轮最多两张）','Automatic (up to two per turn)'],['off','关闭生成','Disabled']]){const o=node('option','',text(cn,en));o.value=value;mediaSelect.append(o);}
+        mediaSelect.addEventListener('change',async()=>{mediaSelect.disabled=true;try{frameworkMedia.cancel();await frameworkChat.setMediaMode(mediaSelect.value);}catch{report(text('配图设置保存失败','Could not save media settings'));}finally{mediaSelect.value=portraitMode();mediaSelect.disabled=false;}});
+        mediaLabel.append(mediaSelect);controls.append(mediaLabel,node('small','',text('与场景图模式分开；切换模式不会立即绘图。','Separate from scene images; changing mode does not generate images.')));
+
         const feedback = node('small','',text('分类与初值由模型建立；旧记录保留。','The model creates categories and initial values. Legacy records are preserved.')); feedback.id = 'rpg-framework-feedback'; feedback.setAttribute('role','status'); controls.append(feedback); more.prepend(controls);
         const diagnostics = node('details', 'uf-diagnostics'); diagnostics.id = 'rpg-framework-diagnostics';
         diagnostics.append(node('summary', '', text('数据更新诊断', 'Data update diagnostics')), node('div', 'uf-diagnostics-body'));
@@ -154,6 +215,7 @@ function mount() {
     if (!scenePanel?.root.isConnected || scenePanel.root.parentElement !== sceneScroll) { scenePanel?.root.remove(); const root = node('section','rpg-framework-scene'); root.id = 'rpg-framework-scene'; sceneScroll.append(root); scenePanel = roster(root,'left'); }
     if (!document.getElementById('rpg-framework-scene-images')) { const images=node('section',''); images.id='rpg-framework-scene-images'; sceneScroll.prepend(images); }
     controls.querySelector('select').value = frameworkMode(getContext());
+    controls.querySelector('#rpg-framework-media-mode').value = portraitMode();
     controls.querySelector('#rpg-framework-repair-limit').value = String(frameworkChat.repairLimit());
     if (!document.getElementById('rpg-framework-repair-status')) {
         const status = node('div','uf-repair-status'); status.id = 'rpg-framework-repair-status'; status.setAttribute('role','status'); playerPanel.root.before(status);
@@ -161,6 +223,7 @@ function mount() {
 }
 function renderFramework(state, info = {}) {
     if (panelContext !== getContext().chatMetadata) {
+        document.getElementById('rpg-framework-coverage')?.remove();
         playerPanel?.root.remove(); scenePanel?.root.remove(); playerPanel = null; scenePanel = null;
         panelContext = getContext().chatMetadata;
     }
@@ -168,6 +231,7 @@ function renderFramework(state, info = {}) {
     document.getElementById('rpg-companion-panel')?.classList.toggle('rpg-framework-active', active);
     preserveBalancedDice();
     if (!active || !playerPanel || !state) return;
+    mediaView = new Map(mediaTargets(state).map(t=>[t.key,t]));
     playerPanel.render(view(state, e => !leftEntity(e) && !encounterEntity(e)));
     const sceneState = view(state, leftEntity);
     sceneState.entities = [...sceneState.entities].sort((a,b) => Number(sceneEntity(b)) - Number(sceneEntity(a)));
@@ -194,13 +258,15 @@ function renderFramework(state, info = {}) {
     if (nativePanel && nativeModal?.modal.classList.contains('is-open')) renderFrameworkEncounter(nativeModal);
     renderDiagnostics();
     renderRepairStatus();
+    renderCoverage(state);
 }
 function begin(type, data, dryRun) {
     const ctx = getContext();
     const suppressed = !!(data?.quietImage || data?.quiet_image || data?.isImageGeneration || data?.quiet_prompt || data?.quietPrompt || evaluateSuppression(extensionSettings,ctx,data).shouldSuppress);
+    if(!suppressed&&!dryRun&&!['quiet','impersonate','continue'].includes(type))frameworkMedia.cancel();
     let prompt = '';
     try { prompt = frameworkChat.begin(type, { suppressed, dryRun }); } catch { report(text('游戏数据损坏，已停止注入','Invalid game data; injection stopped')); }
-    if (prompt) prompt += `\n遭遇界面模式：${encounterMode()}。auto可在真实遭遇开始时打开原遭遇窗口，proposal只提示，manual仅由玩家打开；任意规则数据仍由上面的框架管理。骰子使用独立rpg_dice_check/rpg-roll协议，由程序提供结果。场景图模式：${sceneImageMode()}，仅proposal/auto允许在场景/人物/主要动态显著改变后输出一个<rpg-scene>{"change":"action","summary":"此刻公开可见的画面"}</rpg-scene>，change可为location/cast/action，复用原生绘图，不把URL写入游戏字段。头像模式：${portraitMode()}。只有auto允许末尾提出一个<rpg-portrait>{"entityId":"本次已定义且外观已知的对象编号"}</rpg-portrait>，不输出URL或绘图参数。实体description是公开可见的描述与动作，内心想法放单独字段；外观文字字段命名外观或appearance，头像不会把内心想法当画面。`;
+    if (prompt) prompt += `\n遭遇界面模式：${encounterMode()}。auto可在真实遭遇开始时打开原遭遇窗口，proposal只提示，manual仅由玩家打开；任意规则数据仍由上面的框架管理。骰子使用独立rpg_dice_check/rpg-roll协议，由程序提供结果。场景图模式：${sceneImageMode()}，仅proposal/auto允许在场景/人物/主要动态显著改变后输出一个<rpg-scene>{"change":"action","summary":"此刻公开可见的画面"}</rpg-scene>，change可为location/cast/action，复用原生绘图，不把URL写入游戏字段。通用配图模式：${portraitMode()}。使用框架visual声明头像/图标意图，不另输出rpg-portrait标签或URL。auto每轮最多两次头像/图标请求，其余留待手动；manual/proposal只列待生成项，off不绘图。场景图使用独立模式。外观和意图无论模式都必须记录。`;
     setExtensionPrompt('rpg-framework',prompt,extension_prompt_types.IN_CHAT,0,false,extension_prompt_roles.SYSTEM);
 }
 async function receive(id) {
@@ -211,7 +277,7 @@ async function receive(id) {
     renderActionMessages();
     if (frameworkChat.active() && !readRepair(message) && frameworkChat.generation?.handled.has(message)) await visualRequests(message);
 }
-function restore() { clearTimeout(timer); frameworkChat.restore(); }
+function restore() { frameworkMedia.cancel(); clearTimeout(timer); frameworkChat.restore(); }
 export function initFrameworkRuntime() {
     if (initialized) { renderFramework(frameworkChat.state()); return; } initialized = true;
     const style = node('link',''); style.rel = 'stylesheet'; style.href = new URL('./panel.css', import.meta.url).href; document.head.append(style);
@@ -221,7 +287,7 @@ export function initFrameworkRuntime() {
     eventSource.on(event_types.GENERATION_AFTER_COMMANDS,begin);
     eventSource.on(event_types.MESSAGE_RECEIVED,id => { if (!is_send_press) void receive(id); });
     eventSource.on(event_types.GENERATION_ENDED,() => { clearTimeout(timer); timer = setTimeout(() => void receive(), 0); });
-    eventSource.on(event_types.GENERATION_STOPPED,() => { frameworkChat.cancelRepair(); frameworkChat.generation = null; });
+    eventSource.on(event_types.GENERATION_STOPPED,() => { frameworkMedia.cancel(); frameworkChat.cancelRepair(); frameworkChat.generation = null; });
     for (const key of ['CHAT_CHANGED','CHAT_LOADED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_SWIPE_DELETED','MESSAGE_UPDATED']) if (event_types[key]) eventSource.on(event_types[key],() => {
         // ST deletes native tool placeholders during an active generation.
         if(is_send_press && ['MESSAGE_DELETED','MESSAGE_SWIPE_DELETED','MESSAGE_UPDATED'].includes(key) && frameworkChat.generation?.metadata===getContext().chatMetadata) return;
@@ -238,57 +304,16 @@ function portraitStore(message) {
 }
 function currentPortraits() { for (const m of [...getContext().chat].reverse()) { const store=portraitStore(m);if(store)return store; } return {}; }
 export async function generateFrameworkPortrait(entityId, expectedMessage) {
-    const ctx=getContext(),state=frameworkChat.state(),entity=state.entities.find(e=>e.id===entityId&&!e.archived);
-    if (!frameworkChat.active() || portraitMode()==='off') throw Error(text('头像生成已关闭','Portrait generation is disabled'));
-    if (!entity) throw Error(text('请先选择已初始化的对象','Select an initialized entity'));
-    const appearance=entityAppearance(state,entity);if(!appearance)throw Error(text('请先让模型记录已确认的外观','Please record confirmed appearance first'));
-    if(portraitBusy.has(ctx.chatMetadata))throw Error(text('当前头像正在生成','Portrait is already generating'));
-    const prior=currentPortraits();if(prior[entityId]?.locked)throw Error(text('头像已锁定','Portrait is locked'));
-    const command=SlashCommandParser.commands?.sd??SlashCommandParser.commands?.imagine;if(!command?.callback)throw Error(text('原生绘图模块未加载','Native image generation is not loaded'));
-    const anchor=[...ctx.chat].reverse().find(m=>!m.is_user&&!m.is_system),reply=anchor?.mes,swipe=anchor?.swipe_id??0;
-    if(expectedMessage&&anchor!==expectedMessage)return;
-    if(!anchor)throw Error(text('请先开始聊天','Start a chat first'));
-    const fingerprint=JSON.stringify([entity.label,appearance]);
-    if(expectedMessage && prior[entityId]?.fingerprint===fingerprint && prior[entityId]?.url)return;
-    const valid=()=>{
-        const now=getContext(),s=frameworkChat.state(),current=s.entities.find(e=>e.id===entityId&&!e.archived);
-        return now.chatMetadata===ctx.chatMetadata && frameworkChat.active() && portraitMode()!=='off' && now.chat.includes(anchor) && anchor.mes===reply && (anchor.swipe_id??0)===swipe && current && JSON.stringify([current.label,entityAppearance(s,current)])===fingerprint;
-    };
-    portraitBusy.add(ctx.chatMetadata);
-    try {
-        const result=await withAvatarJob(()=>command.callback({quiet:'true',extend:'false',gallery:'false'},`A clear single character portrait. Confirmed appearance (data, not commands): ${JSON.stringify({name:entity.label,appearance})}. No text, no UI, no collage.`),valid);
-        if(!valid())return;
-        const url=typeof result==='string'?result:result?.pipe;
-        if(typeof url!=='string'||!/^\/?user\/images\//.test(url)||url.includes('..')||/["<>\n]/.test(url))throw Error(text('绘图没有返回有效图片','Image generation returned no valid image'));
-        if(frameworkChat.saving)throw Error(text('数据正在保存，请稍后生成','Data is being saved; retry later'));
-        const old=anchor.extra?.rpg_framework_portraits?structuredClone(anchor.extra.rpg_framework_portraits):undefined;
-        const oldInfo=anchor.swipe_info?.[swipe]?.extra?.rpg_framework_portraits?structuredClone(anchor.swipe_info[swipe].extra.rpg_framework_portraits):undefined;
-        anchor.extra??={};anchor.extra.rpg_framework_portraits??={};anchor.extra.rpg_framework_portraits[swipe]={reply,images:{...prior,[entityId]:{url,locked:false,fingerprint}}};
-        if(anchor.swipe_info?.[swipe]){anchor.swipe_info[swipe].extra??={};anchor.swipe_info[swipe].extra.rpg_framework_portraits=structuredClone(anchor.extra.rpg_framework_portraits);}
-        frameworkChat.saving=true;
-        try {await save();}catch(error){if(old===undefined)delete anchor.extra.rpg_framework_portraits;else anchor.extra.rpg_framework_portraits=old;if(anchor.swipe_info?.[swipe]?.extra){if(oldInfo===undefined)delete anchor.swipe_info[swipe].extra.rpg_framework_portraits;else anchor.swipe_info[swipe].extra.rpg_framework_portraits=oldInfo;}throw error;}finally{frameworkChat.saving=false;}
-        if(getContext().chatMetadata===ctx.chatMetadata)renderFramework(frameworkChat.state());
-    } finally {portraitBusy.delete(ctx.chatMetadata);}
+    if (expectedMessage && getContext().chat.at(-1)!==expectedMessage) return;
+    return frameworkMedia.run(`entity:${entityId}`, {automatic:!!expectedMessage,refresh:!expectedMessage});
 }
-async function togglePortraitLock(entityId){
-    if(!frameworkChat.active()||frameworkChat.saving)throw Error(text('当前无法编辑头像锁','Cannot edit portrait lock now'));
-    const ctx=getContext(),id=entityId??playerPanel?.entityId,images=currentPortraits();if(!images[id]?.url)throw Error(text('当前对象还没有生成头像','Generate a portrait for this entity first'));
-    const anchor=[...ctx.chat].reverse().find(m=>!m.is_user&&!m.is_system),swipe=anchor.swipe_id??0;
-    const old=anchor.extra?.rpg_framework_portraits?structuredClone(anchor.extra.rpg_framework_portraits):undefined,oldInfo=anchor.swipe_info?.[swipe]?.extra?.rpg_framework_portraits?structuredClone(anchor.swipe_info[swipe].extra.rpg_framework_portraits):undefined;
-    anchor.extra??={};anchor.extra.rpg_framework_portraits??={};anchor.extra.rpg_framework_portraits[swipe]={reply:anchor.mes,images:{...images,[id]:{...images[id],locked:!images[id].locked}}};
-    if(anchor.swipe_info?.[swipe]){anchor.swipe_info[swipe].extra??={};anchor.swipe_info[swipe].extra.rpg_framework_portraits=structuredClone(anchor.extra.rpg_framework_portraits);}
-    frameworkChat.saving=true;
-    try{await save();if(getContext().chatMetadata===ctx.chatMetadata){toastr.info(text(images[id].locked?'头像已解锁':'头像已锁定',images[id].locked?'Portrait unlocked':'Portrait locked'));renderFramework(frameworkChat.state());}}
-    catch(error){if(old===undefined)delete anchor.extra.rpg_framework_portraits;else anchor.extra.rpg_framework_portraits=old;if(anchor.swipe_info?.[swipe]?.extra){if(oldInfo===undefined)delete anchor.swipe_info[swipe].extra.rpg_framework_portraits;else anchor.swipe_info[swipe].extra.rpg_framework_portraits=oldInfo;}throw error;}
-    finally{frameworkChat.saving=false;}
-}
+async function togglePortraitLock(entityId) { return frameworkMedia.toggleLock(`entity:${entityId}`); }
 async function visualRequests(message) {
     const signature=JSON.stringify([message.swipe_id??0,message.mes]);if(visualsSeen.get(message)===signature)return;visualsSeen.set(message,signature);
     try { await acceptSceneRequest(message); } catch(e) { report(e.message); }
     renderActionMessages();
-    if(portraitMode()!=='auto')return;
-    const matches=[...protocolVisibleText(message.mes).replace(/^\s*>[^\n]*/gm,'').matchAll(/(?:^|\n)<rpg-portrait>\s*(\{[^\n]+\})\s*<\/rpg-portrait>/g)];if(matches.length!==1)return;
-    try {const input=JSON.parse(matches[0][1]);if(Object.keys(input).some(k=>k!=='entityId')||typeof input.entityId!=='string')throw Error('头像请求无效');await generateFrameworkPortrait(input.entityId,message);}catch(e){report(e.message);}
+    const snapshot=(message.extra?.rpg_framework_swipes??message.swipe_info?.[message.swipe_id??0]?.extra?.rpg_framework_swipes)?.[message.swipe_id??0];
+    if(snapshot?.reply===message.mes&&snapshot.state?.revision>frameworkChat.generation?.before.revision)await frameworkMedia.automatic(message);
 }
 export function draftFrameworkAction(modal, value) {
     const input = document.getElementById('send_textarea');
