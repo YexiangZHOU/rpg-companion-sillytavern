@@ -1,9 +1,10 @@
+import { wantsBalancedLayout } from './balancedLayout.js';
 /**
  * Desktop UI Module
  * Handles desktop-specific UI functionality: tab navigation and strip widgets
  */
 
-import { i18n } from '../../core/i18n.js';
+import { i18n, attributeLabelHtml } from '../../core/i18n.js';
 import { extensionSettings, lastGeneratedData, committedTrackerData } from '../../core/state.js';
 import { hexToRgba } from './theme.js';
 
@@ -212,7 +213,7 @@ export function updateStripWidgets() {
                 }
 
                 const $item = $(`<div class="rpg-strip-attr-item" title="${key.toUpperCase()}: ${value}">
-                    <span class="rpg-strip-attr-name">${key.toUpperCase()}</span>
+                    <span class="rpg-strip-attr-name">${attributeLabelHtml(key, configuredAttrs.find(attr => attr.id === key)?.name)}</span>
                     <span class="rpg-strip-attr-value">${value}</span>
                 </div>`);
                 $attrsGrid.append($item);
@@ -279,11 +280,12 @@ function hexToRgb(hex) {
  * Creates two tabs: Status (Stats/Info/Thoughts) and Inventory.
  */
 export function setupDesktopTabs() {
+    if (wantsBalancedLayout()) return;
     const isDesktop = window.innerWidth > 1000;
     if (!isDesktop) return;
 
     // Check if tabs already exist
-    if ($('.rpg-tabs-nav').length > 0) return;
+    if ($('#rpg-companion-panel .rpg-tabs-nav').length > 0) return;
 
     const $contentBox = $('.rpg-content-box');
 
@@ -380,8 +382,9 @@ export function setupDesktopTabs() {
     $tabsContainer.append($inventoryTab);
     $tabsContainer.append($questsTab);
 
-    // Replace content box with tabs container
-    $contentBox.html('').append($tabsContainer);
+    // Preserve the music section and its handlers when replacing tab scaffolding.
+    const $music = $('#rpg-music-player').detach();
+    $contentBox.html('').append($tabsContainer, $music);
     i18n.applyTranslations($tabsContainer[0]);
 
     // Handle tab switching
@@ -393,8 +396,8 @@ export function setupDesktopTabs() {
         $(this).addClass('active');
 
         // Update active tab content
-        $('.rpg-tab-content').removeClass('active');
-        $(`.rpg-tab-content[data-tab-content="${tabName}"]`).addClass('active');
+        $tabsContainer.find('.rpg-tab-content').removeClass('active');
+        $tabsContainer.find(`.rpg-tab-content[data-tab-content="${tabName}"]`).addClass('active');
     });
 
 
@@ -405,6 +408,7 @@ export function setupDesktopTabs() {
  * Used when transitioning from desktop to mobile.
  */
 export function removeDesktopTabs() {
+    if (document.querySelector('.rpg-balanced')) return;
     // Get sections from tabs before removing
     const $userStats = $('#rpg-user-stats').detach();
     const $infoBox = $('#rpg-info-box').detach();

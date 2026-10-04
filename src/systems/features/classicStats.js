@@ -7,7 +7,7 @@ import {
     extensionSettings,
     $userStatsContainer
 } from '../../core/state.js';
-import { saveSettings, saveChatData } from '../../core/persistence.js';
+import { saveSettings, saveChatData, recordManualNumericEdit } from '../../core/persistence.js';
 import { updateFabWidgets } from '../ui/mobile.js';
 
 /**
@@ -26,6 +26,7 @@ export function setupClassicStatsButtons() {
         }
         if (extensionSettings.classicStats[stat] < 999) {
             extensionSettings.classicStats[stat]++;
+            recordManualNumericEdit(stat, extensionSettings.classicStats[stat]);
             saveSettings();
             saveChatData();
             // Update only the specific stat value, not the entire stats panel
@@ -43,6 +44,7 @@ export function setupClassicStatsButtons() {
         }
         if (extensionSettings.classicStats[stat] > 1) {
             extensionSettings.classicStats[stat]--;
+            recordManualNumericEdit(stat, extensionSettings.classicStats[stat]);
             saveSettings();
             saveChatData();
             // Update only the specific stat value, not the entire stats panel

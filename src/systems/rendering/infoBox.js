@@ -1,3 +1,5 @@
+import { decorateBalancedScene, wantsBalancedLayout, preserveBalancedDice } from '../ui/balancedLayout.js';
+import { renderSceneImage } from '../features/sceneImage.js';
 /**
  * Info Box Rendering Module
  * Handles rendering of the info box dashboard with weather, date, time, and location widgets
@@ -10,7 +12,7 @@ import {
     committedTrackerData,
     $infoBoxContainer
 } from '../../core/state.js';
-import { saveChatData, setMessageSwipeTrackerField } from '../../core/persistence.js';
+import { saveChatData, saveSettings, setMessageSwipeTrackerField } from '../../core/persistence.js';
 import { i18n } from '../../core/i18n.js';
 import { isItemLocked } from '../generation/lockManager.js';
 import { repairJSON } from '../../utils/jsonRepair.js';
@@ -28,9 +30,9 @@ function getLockIconHtml(tracker, path) {
 
     const isLocked = isItemLocked(tracker, path);
     const lockIcon = isLocked ? '🔒' : '🔓';
-    const lockTitle = isLocked ? 'Locked' : 'Unlocked';
+    const lockTitle = i18n.getTranslation(isLocked ? 'infoBox.locked' : 'infoBox.unlocked') || (isLocked ? 'Locked' : 'Unlocked');
     const lockedClass = isLocked ? ' locked' : '';
-    return `<span class="rpg-section-lock-icon${lockedClass}" data-tracker="${tracker}" data-path="${path}" title="${lockTitle}">${lockIcon}</span>`;
+    return `<span class="rpg-section-lock-icon${lockedClass}" data-tracker="${tracker}" data-path="${path}" data-i18n-title="${isLocked ? 'infoBox.locked' : 'infoBox.unlocked'}" title="${lockTitle}">${lockIcon}</span>`;
 }
 
 /**
@@ -76,6 +78,7 @@ function separateEmojiFromText(str) {
  * Includes event listeners for editable fields.
  */
 export function renderInfoBox() {
+    preserveBalancedDice();
     // console.log('[RPG InfoBox Render] ==================== RENDERING INFO BOX ====================');
     // console.log('[RPG InfoBox Render] showInfoBox setting:', extensionSettings.showInfoBox);
     // console.log('[RPG InfoBox Render] Container exists:', !!$infoBoxContainer);
@@ -358,6 +361,12 @@ export function renderInfoBox() {
             weekdayDisplay = weekdayDisplay;
         }
 
+        if (wantsBalancedLayout()) {
+            const chinese = i18n.currentLanguage.startsWith('zh');
+            monthDisplay = data.month || (chinese ? '月份' : 'Month');
+            weekdayDisplay = data.weekday || (chinese ? '日期' : 'Day');
+            yearDisplay = data.year || (chinese ? '年份' : 'Year');
+        }
         const dateLockIconHtml = getLockIconHtml('infoBox', 'date');
 
         row1Widgets.push(`
@@ -388,7 +397,7 @@ export function renderInfoBox() {
     // Temperature widget - show if enabled
     if (config?.widgets?.temperature?.enabled) {
         let tempDisplay = data.temperature || '20°C';
-        let tempValue = data.tempValue || 20;
+        let tempValue = data.tempValue ?? 20;
 
         // Apply temperature unit conversion
         const preferredUnit = config.widgets.temperature.unit || 'C';
@@ -414,6 +423,8 @@ export function renderInfoBox() {
             tempValue = preferredUnit === 'F' ? 68 : 20;
         }
 
+        if (wantsBalancedLayout() && !data.temperature) tempDisplay = i18n.getTranslation('layout.unknown') || 'Unknown';
+
         // Calculate thermometer display (convert to Celsius for consistent thresholds)
         const tempInCelsius = preferredUnit === 'F' ? Math.round((tempValue - 32) * 5 / 9) : tempValue;
         const tempPercent = Math.min(100, Math.max(0, ((tempInCelsius + 20) / 60) * 100));
@@ -437,8 +448,8 @@ export function renderInfoBox() {
     // Time widget - show if enabled
     if (config?.widgets?.time?.enabled) {
         // Get both start and end times
-        const timeStartDisplay = data.timeStart || '12:00';
-        const timeEndDisplay = data.timeEnd || data.timeStart || '12:00';
+        const timeStartDisplay = data.timeStart || (wantsBalancedLayout() ? (i18n.getTranslation('layout.unknown') || 'Unknown') : '12:00');
+        const timeEndDisplay = data.timeEnd || data.timeStart || (wantsBalancedLayout() ? (i18n.getTranslation('layout.unknown') || 'Unknown') : '12:00');
 
         // Parse end time for clock hands (use end time for visual display)
         const timeMatch = timeEndDisplay.match(/(\d+):(\d+)/);
@@ -576,6 +587,8 @@ export function renderInfoBox() {
     html += '</div>';
 
     $infoBoxContainer.html(html);
+    renderSceneImage();
+    decorateBalancedScene();
 
     // Add dynamic text scaling for location field
     const updateLocationTextSize = ($element) => {
@@ -652,6 +665,7 @@ export function renderInfoBox() {
 
             // Update icon
             $lockIcon.text(newLockState ? '🔒' : '🔓');
+            $lockIcon.attr('data-i18n-title', newLockState ? 'infoBox.locked' : 'infoBox.unlocked');
             $lockIcon.attr('title', newLockState ? (i18n.getTranslation('infoBox.locked') || 'Locked') : (i18n.getTranslation('infoBox.unlocked') || 'Unlocked'));
             $lockIcon.toggleClass('locked', newLockState);
 

@@ -28,7 +28,7 @@ function getLockIconHtml(tracker, path) {
     const lockIcon = isLocked ? '🔒' : '🔓';
     const lockTitle = isLocked ? i18n.getTranslation('global.locked') || 'Locked' : i18n.getTranslation('global.unlocked') || 'Unlocked';
     const lockedClass = isLocked ? ' locked' : '';
-    return `<span class="rpg-section-lock-icon${lockedClass}" data-tracker="${tracker}" data-path="${path}" title="${lockTitle}">${lockIcon}</span>`;
+    return `<span class="rpg-section-lock-icon${lockedClass}" data-tracker="${tracker}" data-path="${path}" data-i18n-title="${isLocked ? 'global.locked' : 'global.unlocked'}" title="${lockTitle}">${lockIcon}</span>`;
 }
 
 /**
@@ -690,8 +690,9 @@ export function renderInventory() {
 
         // Update icon
         const newIcon = !currentlyLocked ? '🔒' : '🔓';
-        const newTitle = !currentlyLocked ? 'Locked' : 'Unlocked';
+        const newTitle = i18n.getTranslation(!currentlyLocked ? 'global.locked' : 'global.unlocked') || (!currentlyLocked ? 'Locked' : 'Unlocked');
         $icon.text(newIcon);
+        $icon.attr('data-i18n-title', !currentlyLocked ? 'global.locked' : 'global.unlocked');
         $icon.attr('title', newTitle);
 
         // Toggle 'locked' class for persistent visibility

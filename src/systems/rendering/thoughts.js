@@ -1,3 +1,7 @@
+import { showPortraitPreview } from '../ui/portraitPreview.js';
+import { decorateNpcResources } from '../features/actionPanels.js';
+import { npcStatusConfig,npcPercentage } from '../../utils/npcStatus.mjs';
+import { decorateBalancedScene, wantsBalancedLayout, refreshBalancedNpcSummary } from '../ui/balancedLayout.js';
 /**
  * Character Thoughts Rendering Module
  * Handles rendering of character thoughts panel and floating thought bubbles in chat
@@ -9,6 +13,7 @@ import {
     lastGeneratedData,
     committedTrackerData,
     $thoughtsContainer,
+    FALLBACK_AVATAR_DATA_URI,
     addDebugLog
 } from '../../core/state.js';
 import { i18n } from '../../core/i18n.js';
@@ -38,7 +43,7 @@ function getLockIconHtml(tracker, path) {
     const lockIcon = isLocked ? '🔒' : '🔓';
     const lockTitle = isLocked ? i18n.getTranslation('thoughts.locked') || 'Locked' : i18n.getTranslation('thoughts.unlocked') || 'Unlocked';
     const lockedClass = isLocked ? ' locked' : '';
-    return `<span class="rpg-section-lock-icon${lockedClass}" data-tracker="${tracker}" data-path="${path}" title="${lockTitle}">${lockIcon}</span>`;
+    return `<span class="rpg-section-lock-icon${lockedClass}" data-tracker="${tracker}" data-path="${path}" data-i18n-title="${isLocked ? 'thoughts.locked' : 'thoughts.unlocked'}" title="${lockTitle}">${lockIcon}</span>`;
 }
 
 /**
@@ -92,6 +97,7 @@ function getStatColor(percentage, lowColor, highColor, lowOpacity = 100, highOpa
  * Includes event listeners for editable character fields.
  */
 export function renderThoughts({ preserveScroll = false, useCommittedFallback = true } = {}) {
+    const statusOpen=preserveScroll ? new Map([...document.querySelectorAll('#rpg-thoughts .rpg-character-card')].map(card=>[card.dataset.characterName,card.querySelector('.rpg-balanced-npc-status')?.open])) : new Map();
     renderAlternatePresentCharacters({ useCommittedFallback });
     queueThoughtBasedExpressionsUpdate();
 
@@ -125,7 +131,7 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
     }
 
     // Get tracker configuration
-    const config = extensionSettings.trackerConfig?.presentCharacters;
+    const config = npcStatusConfig(extensionSettings.trackerConfig?.presentCharacters,extensionSettings.npcStatusEnabled !== false);
     const enabledFields = config?.customFields?.filter(f => f && f.enabled && f.name) || [];
     const characterStatsConfig = config?.characterStats;
     const enabledCharStats = characterStatsConfig?.enabled && characterStatsConfig?.customStats?.filter(s => s && s.enabled && s.name) || [];
@@ -237,7 +243,7 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
 
     // If JSON parsing failed or returned empty, try text format
     if (presentCharacters.length === 0) {
-        const lines = characterThoughtsData.split('\n');
+        const lines = typeof characterThoughtsData === 'string' ? characterThoughtsData.split('\n') : [];
         debugLog('[RPG Thoughts] Split into lines count:', lines.length);
         debugLog('[RPG Thoughts] Lines:', lines);
 
@@ -319,7 +325,10 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
             }
             // Check if this is a Thoughts line (handled separately for thought bubbles)
             else if (line.trim().match(/^[A-Z][a-z]+:/) && currentCharacter) {
-                // This could be Thoughts, Feelings, etc. - skip for now, handled in thought bubble rendering
+                const separator = line.indexOf(':');
+                const key = line.slice(0,separator).trim();
+                if (key.toLowerCase() === 'thoughts' || key === config?.thoughts?.name) currentCharacter.ThoughtsContent = stripBrackets(line.slice(separator+1).trim());
+                // Preserve legacy thought text for the card layout.
                 debugLog(`[RPG Thoughts] Skipping thoughts/feelings line (handled in bubble rendering)`);
             }
         }
@@ -382,7 +391,7 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
                     <div class="rpg-character-card" data-character-name="${char.name}">
                         <div class="rpg-character-header-row">
                             <div class="rpg-character-avatar rpg-avatar-upload" data-character="${char.name}" title="${i18n.getTranslation('thoughts.clickToUpload') || 'Click to upload avatar'}">
-                                <img src="${characterPortrait}" alt="${char.name}" onerror="this.style.opacity='0.5';this.onerror=null;" />
+                                ${wantsBalancedLayout() ? renderThoughtPortrait(char) : `<img src="${characterPortrait}" alt="${char.name}" onerror="this.style.opacity='0.5';this.onerror=null;" />`}
                                 ${hasRelationshipEnabled ? `<div class="rpg-relationship-badge rpg-editable" contenteditable="true" data-character="${char.name}" data-field="${relationshipFieldName}" title="${i18n.getTranslation('thoughts.clickToEdit') || 'Click to edit'} (emoji: ⚔️ ⚖️ ⭐ ❤️)">${relationshipBadge}</div>` : ''}
                             </div>
                             <div class="rpg-character-header">
@@ -400,6 +409,7 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
                     const rawValue = char[field.name];
                     const fieldValue = extractFieldValue(rawValue);
                     const fieldId = field.name.toLowerCase().replace(/\s+/g, '-');
+                    const npcCondition=field.id==='npc_conditions';
                     const fieldNameLower = field.name.toLowerCase();
                     // Skip lock icons for thoughts field
                     const showLock = !fieldNameLower.includes('thought');
@@ -411,7 +421,8 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
                         html += `
                                 <div class="rpg-character-field rpg-character-${fieldId}" style="position: relative;">
                                     ${lockIconHtml}
-                                    <span class="rpg-editable${emptyClass}" contenteditable="true" data-character="${char.name}" data-field="${field.name}" title="${i18n.getTranslation('thoughts.clickToEdit') || 'Click to edit'}" ${placeholder}>${fieldValue}</span>
+                                    ${npcCondition ? `<span class="rpg-npc-condition-label" data-i18n-key="layout.npcConditions">${i18n.getTranslation('layout.npcConditions') || 'Conditions'}: </span>` : ''}
+                                    <span class="rpg-editable${emptyClass}" contenteditable="true" data-character="${char.name}" data-field="${field.name}" ${npcCondition?'data-npc-condition="true"':''} title="${i18n.getTranslation('thoughts.clickToEdit') || 'Click to edit'}" ${placeholder}>${npcCondition ? escapeInlineThoughtHtml(fieldValue) : fieldValue}</span>
                                 </div>
                         `;
                     } else {
@@ -429,11 +440,15 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
                 if (enabledCharStats.length > 0) {
                     const lockIconHtml = getLockIconHtml('characters', `${char.name}.stats`);
                     html += `<div class="rpg-character-stats" style="position: relative;">
-                        <span class="rpg-section-lock-icon" style="position: absolute; top: 4px; right: 4px; font-size: 1rem; z-index: 10; opacity: 0.7; pointer-events: auto;">${lockIconHtml}</span>
+                        <span class="rpg-thought-lock-wrap" style="position: absolute; top: 4px; right: 4px; font-size: 1rem; z-index: 10; opacity: 0.7; pointer-events: auto;">${lockIconHtml}</span>
                         <div class="rpg-character-stats-inner">`;
                     for (const stat of enabledCharStats) {
-                        const statValue = char[stat.name] || 0;
-                        const statColor = getStatColor(
+                        const statValue = npcPercentage(char[stat.name]);
+                        const statKey=['health','energy'].includes(stat.id) ? stat.id : '';
+                        const defaultName=statKey==='health'?'Health':'Energy';
+                        const labelKey=statKey && stat.name===defaultName ? `layout.npc${statKey==='health'?'Health':'Energy'}` : '';
+                        const statName=labelKey ? i18n.getTranslation(labelKey) || stat.name : stat.name;
+                        const statColor = statValue==null ? 'inherit' : getStatColor(
                             statValue,
                             extensionSettings.statBarColorLow,
                             extensionSettings.statBarColorHigh,
@@ -442,7 +457,7 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
                         );
                         html += `
                                 <div class="rpg-character-stat">
-                                    <span class="rpg-stat-name">${stat.name}: </span><span class="rpg-editable" contenteditable="true" data-character="${char.name}" data-field="${stat.name}" style="color: ${statColor}" title="${i18n.getTranslation('thoughts.clickToEdit') || 'Click to edit'}">${statValue}%</span>
+                                    <span class="rpg-stat-name" ${labelKey?`data-i18n-key="${labelKey}"`:''}>${statName}: </span><span class="rpg-editable" contenteditable="true" data-character="${char.name}" data-field="${stat.name}" data-npc-stat="${statKey}" ${statValue==null?'data-i18n-key="layout.npcUnknown"':''} style="color: ${statColor}" title="${i18n.getTranslation('thoughts.clickToEdit') || 'Click to edit'}">${statValue==null ? i18n.getTranslation('layout.npcUnknown') || 'Unknown' : `${statValue}%`}</span>
                                 </div>
                         `;
                     }
@@ -454,6 +469,11 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
                     </div>
                 `;
 
+                if (wantsBalancedLayout() && extensionSettings.showThoughtsInChat && extensionSettings.thoughtsInChatStyle !== 'inline' && config?.thoughts?.enabled !== false && char.ThoughtsContent) {
+                    // Insert into this card, retaining the existing character edit/save handler.
+                    const end = html.lastIndexOf('</div>');
+                    html = html.slice(0,end) + `<details class="rpg-balanced-thought"><summary>${escapeInlineThoughtHtml(i18n.getTranslation('layout.thoughts') || 'Thoughts')}</summary><div class="rpg-editable" contenteditable="true" data-character="${escapeInlineThoughtHtml(char.name)}" data-field="Thoughts">${escapeInlineThoughtHtml(char.ThoughtsContent)}</div></details>` + html.slice(end);
+                }
                 debugLog(`[RPG Thoughts] ✓ Successfully built HTML for ${char.name}`);
 
             } catch (charError) {
@@ -478,6 +498,12 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
     }
 
     $thoughtsContainer.html(html);
+    decorateBalancedScene();
+    decorateNpcResources();
+    document.querySelectorAll('#rpg-thoughts .rpg-character-card').forEach(card=>{
+        const detail=card.querySelector('.rpg-balanced-npc-status');
+        if(detail && statusOpen.get(card.dataset.characterName))detail.open=true;
+    });
 
     debugLog('[RPG Thoughts] ✓ HTML rendered to container');
     debugLog('[RPG Thoughts] =======================================================');
@@ -489,6 +515,10 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
         const value = $(this).text().trim();
         // console.log('[RPG Companion] Character stat edit:', { character, field, value });
         updateCharacterField(character, field, value);
+        if(this.hasAttribute('data-npc-stat') && npcPercentage(value)!=null) {
+            this.removeAttribute('data-i18n-key');this.textContent=`${npcPercentage(value)}%`;
+        }
+        refreshBalancedNpcSummary();
     });
 
     // Prevent click events on editable elements from bubbling to avatar upload handler
@@ -514,6 +544,7 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
             ? (i18n.getTranslation('thoughts.locked') || 'Locked')
             : (i18n.getTranslation('thoughts.unlocked') || 'Unlocked');
         $icon.text(newIcon);
+        $icon.attr('data-i18n-title', !currentlyLocked ? 'thoughts.locked' : 'thoughts.unlocked');
         $icon.attr('title', newTitle);
 
         // Toggle 'locked' class for persistent visibility
@@ -532,12 +563,31 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
         removeCharacter(characterName);
     });
 
+    if (wantsBalancedLayout()) {
+        $thoughtsContainer.find('.rpg-avatar-upload').each(function() {
+            this.title = i18n.getTranslation('layout.viewPortrait') || 'View portrait';
+            const change = document.createElement('button'); change.type='button';
+            change.className='rpg-portrait-change'; change.textContent='✎'; change.title=i18n.getTranslation('layout.changePortrait') || 'Change portrait'; change.setAttribute('aria-label',change.title);
+            const wrapper=document.createElement('div'); wrapper.className='rpg-portrait-controls';
+            this.before(wrapper); wrapper.append(this,change);
+            change.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();$(this).trigger('click',['upload']);});
+            this.tabIndex=0; this.setAttribute('role','button');
+            this.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();this.click();}});
+        });
+    }
     // Add event listener for avatar upload clicks
-    $thoughtsContainer.find('.rpg-avatar-upload').on('click', function (e) {
+    $thoughtsContainer.find('.rpg-avatar-upload').on('click', function (e, action) {
+        if (action !== 'upload' && e.target.closest('.rpg-editable,.rpg-avatar-gen-overlay,.rpg-section-lock-icon')) return;
         e.preventDefault();
         e.stopPropagation();
 
         const characterName = $(this).data('character');
+
+        if (wantsBalancedLayout() && action !== 'upload') {
+            const image=this.querySelector('img:not([hidden])');
+            if (image) showPortraitPreview(image.getAttribute('src'), characterName);
+            return;
+        }
 
         // Create hidden file input
         const fileInput = $('<input type="file" accept="image/*" style="display: none;">');
@@ -560,9 +610,8 @@ export function renderThoughts({ preserveScroll = false, useCommittedFallback = 
                 // Save settings
                 saveSettings();
 
-                // Update the avatar image immediately
-                const $avatar = $thoughtsContainer.find(`.rpg-avatar-upload[data-character="${characterName}"] img`);
-                $avatar.attr('src', imageUrl);
+                // Re-render also replaces emoji-only placeholders after the first upload.
+                renderThoughts();
 
                 console.log(`[RPG Companion] Avatar uploaded for ${characterName}`);
             };
@@ -738,7 +787,7 @@ export function removeCharacter(characterName) {
  * Creates a character with empty fields based on the tracker template.
  */
 export function addNewCharacter() {
-    const presentCharsConfig = extensionSettings.trackerConfig?.presentCharacters;
+    const presentCharsConfig = npcStatusConfig(extensionSettings.trackerConfig?.presentCharacters,extensionSettings.npcStatusEnabled !== false);
     const enabledFields = presentCharsConfig?.customFields?.filter(f => f && f.enabled && f.name) || [];
     const characterStats = presentCharsConfig?.characterStats;
     const enabledCharStats = characterStats?.enabled && characterStats?.customStats?.filter(s => s && s.enabled && s.name) || [];
@@ -784,7 +833,7 @@ export function addNewCharacter() {
         if (enabledCharStats.length > 0) {
             newCharacter.stats = {};
             for (const stat of enabledCharStats) {
-                newCharacter.stats[stat.name] = 100;
+                newCharacter.stats[stat.name] = ['health','energy'].includes(stat.id) ? null : 100;
             }
         }
 
@@ -872,12 +921,16 @@ export function addNewCharacter() {
  * @param {string} value - New value for the field
  */
 export function updateCharacterField(characterName, field, value) {
+    const effective=npcStatusConfig(extensionSettings.trackerConfig?.presentCharacters,extensionSettings.npcStatusEnabled !== false);
+    if(effective.characterStats?.enabled && effective.characterStats.customStats?.some(s=>s.enabled && s.name===field) && npcPercentage(value)==null) {
+        renderThoughts({preserveScroll:true});return;
+    }
     // Initialize if it doesn't exist
     if (!lastGeneratedData.characterThoughts) {
         lastGeneratedData.characterThoughts = 'Present Characters\n---\n';
     }
 
-    const presentCharsConfig = extensionSettings.trackerConfig?.presentCharacters;
+    const presentCharsConfig = npcStatusConfig(extensionSettings.trackerConfig?.presentCharacters,extensionSettings.npcStatusEnabled !== false);
     const enabledFields = presentCharsConfig?.customFields?.filter(f => f && f.enabled && f.name) || [];
     const characterStats = presentCharsConfig?.characterStats;
     const enabledCharStats = characterStats?.enabled && characterStats?.customStats?.filter(s => s && s.enabled && s.name) || [];
@@ -960,8 +1013,8 @@ export function updateCharacterField(characterName, field, value) {
                 // Check if it's a character stat
                 const isStatField = enabledCharStats.findIndex(s => s.name === field) !== -1;
                 if (isStatField) {
-                    let numValue = parseInt(value.replace('%', '').trim());
-                    if (isNaN(numValue)) numValue = 0;
+                    let numValue = npcPercentage(value);
+                    if (numValue==null) return;
                     numValue = Math.max(0, Math.min(100, numValue));
 
                     // Handle both array format (from LLM) and object format
@@ -1343,6 +1396,11 @@ export function updateChatThoughts(attempt = 0) {
 
     // Remove any existing inline thought dropdowns from previous renders
     $('.rpg-inline-thoughts, .rpg-inline-thought').remove();
+
+    if (wantsBalancedLayout() && thoughtsStyle !== 'inline') {
+        teardownInlineThoughtsObserver();
+        return;
+    }
 
     const canRenderThoughts = extensionSettings.enabled
         && extensionSettings.showThoughtsInChat
@@ -2014,6 +2072,16 @@ function constrainIconToViewport($icon) {
     }
 }
 
+/** Reuse an existing portrait; retain the emoji until the image loads. */
+function renderThoughtPortrait(thought) {
+    const fallback = `<span class="rpg-thought-portrait-fallback">${escapeInlineThoughtHtml(thought.emoji || '👤')}</span>`;
+    const portrait = resolvePresentCharacterPortrait(thought.name);
+    if (typeof portrait !== 'string' || !portrait || portrait === FALLBACK_AVATAR_DATA_URI) {
+        return fallback;
+    }
+    return `${fallback}<img class="rpg-thought-portrait" src="${escapeInlineThoughtHtml(portrait)}" alt="${escapeInlineThoughtHtml(thought.name || '')}" hidden onload="this.hidden=false;this.previousElementSibling.hidden=true" onerror="this.hidden=true;this.previousElementSibling.hidden=false">`;
+}
+
 /**
  * Creates or updates the floating thought panel positioned next to the character's avatar.
  * Handles responsive positioning for left/right panel modes and mobile viewports.
@@ -2045,7 +2113,7 @@ export function createThoughtPanel($message, thoughtsArray) {
         thoughtsHtml += `
             <div class="rpg-thought-item">
                 <div class="rpg-thought-emoji-box">
-                    ${thought.emoji}
+                    ${renderThoughtPortrait(thought)}
                 </div>
                 <div class="rpg-thought-content rpg-editable" contenteditable="true" data-character="${thought.name}" data-field="thoughts" title="Click to edit thoughts">
                     ${thought.thought}
@@ -2442,6 +2510,7 @@ export function createThoughtPanel($message, thoughtsArray) {
             ? (i18n.getTranslation('thoughts.locked') || 'Locked')
             : (i18n.getTranslation('thoughts.unlocked') || 'Unlocked');
         $icon.text(newIcon);
+        $icon.attr('data-i18n-title', !currentlyLocked ? 'thoughts.locked' : 'thoughts.unlocked');
         $icon.attr('title', newTitle);
 
         // Toggle 'locked' class for persistent visibility

@@ -1,3 +1,4 @@
+import { npcStatusConfig } from '../../utils/npcStatus.mjs';
 /**
  * JSON Prompt Builder Helpers
  * Helper functions for building JSON format tracker prompts
@@ -61,6 +62,10 @@ export function buildUserStatsJSONInstruction() {
     }
 
     instruction += '  ],\n';
+
+    if (['generic', 'dnd5e'].includes(extensionSettings.sheetSyncMode)) {
+        instruction += '  "characterSheet": {"confirmed": false, "level": null, "attributes": {"str": null, "dex": null, "con": null, "int": null, "wis": null, "cha": null}},\n';
+    }
 
     // Status section
     if (userStatsConfig?.statusSection?.enabled) {
@@ -185,7 +190,7 @@ export function buildInfoBoxJSONInstruction() {
  */
 export function buildCharactersJSONInstruction() {
     const userName = getContext().name1;
-    const presentCharsConfig = extensionSettings.trackerConfig?.presentCharacters;
+    const presentCharsConfig = npcStatusConfig(extensionSettings.trackerConfig?.presentCharacters,extensionSettings.npcStatusEnabled !== false);
     const enabledFields = presentCharsConfig?.customFields?.filter(f => f && f.enabled && f.name) || [];
     const relationshipsEnabled = presentCharsConfig?.relationships?.enabled !== false;
     const thoughtsConfig = presentCharsConfig?.thoughts;

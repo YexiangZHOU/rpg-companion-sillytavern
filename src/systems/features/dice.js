@@ -1,127 +1,49 @@
-/**
- * Dice System Module
- * Handles dice rolling logic, display updates, and quick reply integration
- */
-
-import {
-    extensionSettings,
-    pendingDiceRoll,
-    setPendingDiceRoll
-} from '../../core/state.js';
-import { saveSettings } from '../../core/persistence.js';
+/** Free rolls are chat-local; model checks use diceRequests.js. */
+import { getContext } from '../../../../../../extensions.js';
+import { saveChatDebounced, getCurrentChatId } from '../../../../../../../script.js';
+import { extensionSettings, setPendingDiceRoll } from '../../core/state.js';
 import { i18n } from '../../core/i18n.js';
-
-/**
- * Rolls the dice and displays result.
- * Works with the DiceModal class for UI updates.
- * @param {DiceModal} diceModal - The DiceModal instance
- */
-export async function rollDice(diceModal) {
-    if (!diceModal) return;
-
-    const count = parseInt(String($('#rpg-dice-count').val())) || 1;
-    const sides = parseInt(String($('#rpg-dice-sides').val())) || 20;
-
-    // Start rolling animation
-    diceModal.startRolling();
-
-    // Wait for animation (simulate rolling)
-    await new Promise(resolve => setTimeout(resolve, 1200));
-
-    // Execute /roll command
-    const rollCommand = `/roll ${count}d${sides}`;
-    const rollResult = await executeRollCommand(rollCommand);
-
-    // Parse result
-    const total = rollResult.total || 0;
-    const rolls = rollResult.rolls || [];
-
-    // Store result temporarily (not saved until "Save Roll" is clicked)
-    setPendingDiceRoll({
-        formula: `${count}d${sides}`,
-        total: total,
-        rolls: rolls,
-        timestamp: Date.now()
-    });
-
-    // Show result
-    diceModal.showResult(total, rolls);
-
-    // Don't update sidebar display yet - only update when user clicks "Save Roll"
+import { performRoll } from './diceEngine.mjs';
+const metadata = () => getContext().chatMetadata;
+export function currentDiceData(create=false) {
+    const m=metadata();
+    if (!m) return null;
+    if (!m.rpg_dice_v1 && create) m.rpg_dice_v1={version:1,records:[],lastRoll:null};
+    return m.rpg_dice_v1 || null;
 }
-
-/**
- * Executes a /roll command and returns the result.
- * @param {string} command - The roll command (e.g., "/roll 2d20")
- * @returns {Promise<{total: number, rolls: Array<number>}>} The roll result
- */
-export async function executeRollCommand(command) {
+export function saveFreeRoll(roll) {
+    const data=currentDiceData(true); if (!data) throw Error('当前没有可保存的聊天');
+    data.lastRoll=roll; saveChatDebounced(); updateDiceDisplay();
+}
+export async function rollDice(modal) {
+    if (!modal || modal.state !== 'IDLE' || !modal.modal.classList.contains('is-open')) return;
+    const original=metadata(), chatKey=getCurrentChatId(), token=++modal.sequence;
     try {
-        // Parse the dice notation (e.g., "2d20")
-        const match = command.match(/(\d+)d(\d+)/);
-        if (!match) {
-            return { total: 0, rolls: [] };
-        }
-
-        const count = parseInt(match[1]);
-        const sides = parseInt(match[2]);
-        const rolls = [];
-        let total = 0;
-
-        for (let i = 0; i < count; i++) {
-            const roll = Math.floor(Math.random() * sides) + 1;
-            rolls.push(roll);
-            total += roll;
-        }
-
-        return { total, rolls };
-    } catch (error) {
-        console.error('[RPG Companion] Error rolling dice:', error);
-        return { total: 0, rolls: [] };
+        const count=Number($('#rpg-dice-count').val()),sides=Number($('#rpg-dice-sides').val());
+        const result=performRoll({id:'free',actor:'玩家',reason:'自由投掷',count,sides});
+        setPendingDiceRoll(null); modal.startRolling();
+        await new Promise(resolve=>setTimeout(resolve,1200));
+        if (modal.sequence !== token || metadata() !== original || getCurrentChatId() !== chatKey || !modal.modal.classList.contains('is-open')) return;
+        modal.rollMetadata=original; modal.rollChatKey=chatKey; setPendingDiceRoll(result); modal.showResult(result.total,result.rolls);
+    } catch (e) {
+        if (modal.sequence === token) { modal._setState('IDLE'); toastr.error(e.message); }
     }
 }
-
-/**
- * Updates the dice display in the sidebar.
- */
+export async function executeRollCommand(command) {
+    const match=String(command).match(/^\/roll (\d+)d(\d+)$/);
+    if (!match) throw Error('仅支持 /roll NdM');
+    return performRoll({id:'free',actor:'玩家',reason:'自由投掷',count:Number(match[1]),sides:Number(match[2])});
+}
 export function updateDiceDisplay() {
-    // Hide the entire dice display if showDiceDisplay is false
-    const $display = $('#rpg-dice-display');
-    if (!extensionSettings.showDiceDisplay) {
-        $display.hide();
-        return;
-    } else {
-        $display.show();
-    }
-
-    const lastRoll = extensionSettings.lastDiceRoll;
-    const label = i18n.getTranslation('template.mainPanel.lastRoll') || 'Last Roll: ';
-    const noneValue = i18n.getTranslation('global.none') || 'None';
-
-    if (lastRoll) {
-        $('#rpg-last-roll-text').text(`${label}(${lastRoll.formula}): ${lastRoll.total}`);
-    } else {
-        $('#rpg-last-roll-text').text(label + noneValue);
-    }
+    const display=$('#rpg-dice-display');
+    if (!extensionSettings.showDiceDisplay) { display.hide(); return; }
+    display.show();
+    const roll=currentDiceData()?.lastRoll;
+    const label=i18n.getTranslation('template.mainPanel.lastRoll') || 'Last Roll: ';
+    $('#rpg-last-roll-text').text(roll ? `${label}(${roll.formula}): ${roll.total}` : label+(i18n.getTranslation('global.none') || 'None'));
 }
-
-/**
- * Clears the last dice roll.
- * Called when the x button is clicked.
- */
 export function clearDiceRoll() {
-    extensionSettings.lastDiceRoll = null;
-    saveSettings();
+    const data=currentDiceData(); if (data) { data.lastRoll=null; saveChatDebounced(); }
     updateDiceDisplay();
 }
-
-/**
- * Adds the Roll Dice quick reply button.
- */
-export function addDiceQuickReply() {
-    // Create quick reply button if Quick Replies exist
-    if (window.quickReplyApi) {
-        // Quick Reply API integration would go here
-        // For now, the dice display in the sidebar serves as the button
-    }
-}
+export function addDiceQuickReply() {}

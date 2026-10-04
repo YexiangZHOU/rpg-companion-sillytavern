@@ -48,27 +48,19 @@ export function applyLocks(trackerData, trackerType) {
  * @returns {string} JSON string with locks applied
  */
 function applyUserStatsLocks(data, lockedItems) {
-    // Lock individual stats within stats object
-    if (data.stats && lockedItems.stats) {
-        // Handle both section lock and individual stat locks
-        const isStatsLocked = lockedItems.stats === true;
-        if (isStatsLocked) {
-            // Lock entire stats section
-            for (const statName in data.stats) {
-                data.stats[statName] = {
-                    value: data.stats[statName].value || data.stats[statName],
-                    locked: true
-                };
-            }
-        } else {
-            // Lock individual stats
-            for (const statName in lockedItems.stats) {
-                if (lockedItems.stats[statName] && data.stats[statName] !== undefined) {
-                    data.stats[statName] = {
-                        value: data.stats[statName].value || data.stats[statName],
-                        locked: true
-                    };
-                }
+    // Preserve id/name and numeric zero in the v3 stats array.
+    if (Array.isArray(data.stats) && lockedItems.stats) {
+        data.stats = data.stats.map(stat => {
+            const locked = lockedItems.stats === true ||
+                lockedItems.stats?.[stat.id] === true || lockedItems.stats?.[stat.name] === true;
+            return locked ? { ...stat, locked: true } : stat;
+        });
+    } else if (data.stats && lockedItems.stats) {
+        // Legacy object format, retained without truthiness-based zero loss.
+        for (const key of Object.keys(data.stats)) {
+            if (lockedItems.stats === true || lockedItems.stats?.[key] === true) {
+                const item = data.stats[key];
+                data.stats[key] = { value: item?.value ?? item, locked: true };
             }
         }
     }

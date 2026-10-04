@@ -101,3 +101,15 @@ class Internationalization {
 }
 
 export const i18n = new Internationalization();
+
+/** Localize standard attribute labels without renaming saved/custom attributes. */
+export function attributeLabelHtml(id, name = String(id).toUpperCase()) {
+    const standardIds = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+    const key = standardIds.includes(id) && name === id.toUpperCase()
+        ? `userStats.attribute.${id}` : null;
+    const text = String((key && i18n.getTranslation(key)) || name);
+    const escaped = text.replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[char]);
+    return key ? `<span data-i18n-key="${key}">${escaped}</span>` : escaped;
+}

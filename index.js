@@ -1,3 +1,6 @@
+import { initDiceRequests } from './src/systems/features/diceRequests.js';
+import { initActionBridge } from './src/systems/features/actionBridge.js';
+import { mountBalancedLayout, unmountBalancedLayout, wantsBalancedLayout } from './src/systems/ui/balancedLayout.js';
 import { getContext, renderExtensionTemplateAsync, extension_settings as st_extension_settings } from '../../../extensions.js';
 import { eventSource, event_types, substituteParams, chat, saveSettingsDebounced, chat_metadata, saveChatDebounced, user_avatar, getThumbnailUrl, characters, this_chid, extension_prompt_types, extension_prompt_roles, setExtensionPrompt, reloadCurrentChat, Generate, getRequestHeaders } from '../../../../script.js';
 import { selected_group, getGroupMembers } from '../../../group-chats.js';
@@ -243,6 +246,7 @@ async function addExtensionSettings() {
             // Disable dynamic weather effects
             toggleDynamicWeather(false);
 
+            unmountBalancedLayout();
             // Remove panel and toggle buttons
             $('#rpg-companion-panel').remove();
             $('#rpg-mobile-toggle').remove();
@@ -323,6 +327,19 @@ async function initUI() {
     $('#rpg-toggle-auto-update').on('change', function() {
         extensionSettings.autoUpdate = $(this).prop('checked');
         saveSettings();
+    });
+
+    $('#rpg-layout-mode').val(extensionSettings.layoutMode || 'classic').on('change', function() {
+        unmountBalancedLayout();
+        extensionSettings.layoutMode = $(this).val() === 'balanced' ? 'balanced' : 'classic';
+        saveSettings();
+        if (wantsBalancedLayout()) mountBalancedLayout();
+        else {
+            applyPanelPosition();
+            if (window.innerWidth > 1000) setupDesktopTabs(); else setupMobileTabs();
+        }
+        renderUserStats(); renderInfoBox(); renderThoughts();
+        updateSectionVisibility(); updateChatThoughts();
     });
 
     $('#rpg-position-select').on('change', function() {
@@ -408,13 +425,14 @@ async function initUI() {
 
     $('#rpg-toggle-thoughts-in-chat').on('change', function() {
         extensionSettings.showThoughtsInChat = $(this).prop('checked');
-        // console.log('[RPG Companion] Toggle showThoughtsInChat changed to:', extensionSettings.showThoughtsInChat);
+        if (wantsBalancedLayout()) renderThoughts();
         saveSettings();
         updateChatThoughts();
     });
 
     $('#rpg-toggle-inline-thoughts').on('change', function() {
         extensionSettings.thoughtsInChatStyle = $(this).prop('checked') ? 'inline' : 'corner';
+        if (wantsBalancedLayout()) renderThoughts();
         saveSettings();
         updateChatThoughts();
     });
@@ -1275,6 +1293,8 @@ async function initUI() {
     renderMusicPlayer($musicPlayerContainer[0]);
     updateDiceDisplay();
     setupDiceRoller();
+    initDiceRequests();
+    initActionBridge();
     setupClassicStatsButtons();
     setupSettingsPopup();
     initTrackerEditor();
@@ -1294,6 +1314,7 @@ async function initUI() {
         window.RPGCompanion = {};
     }
     window.RPGCompanion.updateWeatherEffect = updateWeatherEffect;
+    mountBalancedLayout();
 }
 
 

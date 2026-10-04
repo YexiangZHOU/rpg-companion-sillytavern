@@ -1,10 +1,12 @@
+import { restoreNumericPayload, readPayload } from '../generation/numericState.mjs';
+import { activePortrait, actionState } from '../features/actionStore.js';
 /**
  * SillyTavern Integration Module
  * Handles all event listeners and integration with SillyTavern's event system
  */
 
 import { getContext } from '../../../../../../extensions.js';
-import { chat, chat_metadata, user_avatar, setExtensionPrompt, extension_prompt_types } from '../../../../../../../script.js';
+import { chat, chat_metadata, user_avatar, setExtensionPrompt, extension_prompt_types, is_send_press, updateMessageBlock } from '../../../../../../../script.js';
 
 // Core modules
 import {
@@ -39,9 +41,11 @@ import {
 import { i18n } from '../../core/i18n.js';
 
 // Generation & Parsing
-import { parseResponse, parseUserStats } from '../generation/parser.js';
+import { parseResponse, parseUserStats, prepareNumericUserStats } from '../generation/parser.js';
 import { parseAndStoreSpotifyUrl, convertToEmbedUrl } from '../features/musicPlayer.js';
 import { updateRPGData } from '../generation/apiClient.js';
+import { generateAvatarsForCharacters } from '../features/avatarGenerator.js';
+import { createTogetherAvatarRunner } from '../features/togetherAvatars.mjs';
 import { removeLocks } from '../generation/lockManager.js';
 import { onGenerationStarted, initHistoryInjectionListeners } from '../generation/injector.js';
 
@@ -65,6 +69,16 @@ import { updateAllCheckpointIndicators } from '../ui/checkpointUI.js';
 import { restoreCheckpointOnLoad } from '../features/chapterCheckpoint.js';
 
 let chatStateRehydrateRunId = 0;
+const togetherAvatars = createTogetherAvatarRunner({
+    getContext,
+    getSettings: () => extensionSettings,
+    isAwaiting: () => isAwaitingNewMessage,
+    isBusy: () => is_send_press,
+    getSwipeId: resolveActiveSwipeId,
+    generate: generateAvatarsForCharacters,
+    render: renderThoughts,
+    report: () => console.warn('[RPG Companion] Together avatar generation failed.'),
+});
 
 /**
  * Reads the swipe store of the last assistant message in `currentChat` and
@@ -249,6 +263,11 @@ function resolveActiveSwipeId(message) {
     }
 
     const currentText = typeof message?.mes === 'string' ? message.mes : '';
+    // ST can point at a pending swipe beyond the existing array. Do not clamp
+    // that slot to a sibling reply while preparing its generation context.
+    if (fallbackSwipeId >= swipes.length && (!currentText || currentText === '...')) {
+        return fallbackSwipeId;
+    }
     if (currentText) {
         for (let i = swipes.length - 1; i >= 0; i--) {
             if (typeof swipes[i] === 'string' && swipes[i] === currentText) {
@@ -386,6 +405,8 @@ export function scheduleChatStateRehydration() {
 }
 
 export function onChatLoaded() {
+    togetherAvatars.invalidate();
+    setIsAwaitingNewMessage(false);
     loadChatData();
     restoreOrRepairLatestTrackerState();
     maybeRehydrateUserStatsFromDisplayData();
@@ -407,6 +428,7 @@ function syncDisplayedTrackerStateFromChat() {
         committedTrackerData.characterThoughts = null;
     }
 
+    if (!restored) restoreNumericPayload({}, extensionSettings);
     rerenderRpgState();
     updateChatThoughts();
 }
@@ -438,9 +460,8 @@ export function onMessageSent() {
 
     // Set flag to indicate we're expecting a new message from generation
     // This allows auto-update to distinguish between new generations and loading chat history
+    togetherAvatars.invalidate();
     setIsAwaitingNewMessage(true);
-
-
 
 
     // Note: FAB spinning is NOT shown for together mode since no extra API request is made
@@ -452,6 +473,8 @@ export function onMessageSent() {
  * Event handler for when a message is generated.
  */
 export async function onMessageReceived(data) {
+    const freshTogetherReply = isAwaitingNewMessage;
+    let avatarRequest = null;
     // console.log('[RPG Companion] onMessageReceived called, lastActionWasSwipe:', lastActionWasSwipe);
 
     if (!extensionSettings.enabled) {
@@ -471,6 +494,13 @@ export async function onMessageReceived(data) {
             const rawSwipeId = Number(lastMessage.swipe_id ?? 0);
             const responseText = lastMessage.mes;
             const parsedData = parseResponse(responseText, { suppressNoDataError: true });
+            if (freshTogetherReply && extensionSettings.showUserStats) {
+                parsedData.userStats = prepareNumericUserStats(parsedData.userStats || '{}');
+            } else {
+                // History events must preserve manual edits and validated snapshots.
+                const stored = getSwipeData(lastMessage, resolveActiveSwipeId(lastMessage));
+                if (stored?.userStats) parsedData.userStats = stored.userStats;
+            }
 
             // Note: Don't show parsing error here - this event fires when loading chat history too
             // Error notification is handled in apiClient.js for fresh generations only
@@ -570,6 +600,9 @@ export async function onMessageReceived(data) {
 
             // Save to chat metadata
             saveChatData();
+            if (freshTogetherReply && parsedData.characterThoughts) {
+                avatarRequest = { message: lastMessage, thoughts: parsedData.characterThoughts };
+            }
         }
     } else if (extensionSettings.generationMode === 'separate' || extensionSettings.generationMode === 'external') {
         // In separate/external mode, also parse Spotify URLs from the main roleplay response
@@ -636,6 +669,12 @@ export async function onMessageReceived(data) {
     updateFabWidgets();
     updateStripWidgets();
 
+    // Start before the checkpoint's async gap, while the captured reply is current.
+    if (avatarRequest) {
+        // The receiving handler has consumed the fresh-message flag before any quiet API call.
+        void togetherAvatars.run(avatarRequest.message, avatarRequest.thoughts, true)
+            .catch(() => console.warn('[RPG Companion] Together avatar task failed.'));
+    }
     // Re-apply checkpoint in case SillyTavern unhid messages during generation
     await restoreCheckpointOnLoad();
 }
@@ -644,6 +683,8 @@ export async function onMessageReceived(data) {
  * Event handler for character change.
  */
 export function onCharacterChanged() {
+    togetherAvatars.invalidate();
+    setIsAwaitingNewMessage(false);
     // Remove thought panel and icon when changing characters
     $('#rpg-thought-panel').remove();
     $('#rpg-thought-icon').remove();
@@ -696,6 +737,7 @@ export function onCharacterChanged() {
  * Loads the RPG data for the swipe the user navigated to.
  */
 export function onMessageSwiped(messageIndex) {
+    togetherAvatars.invalidate();
     if (!extensionSettings.enabled) {
         return;
     }
@@ -762,7 +804,10 @@ export function onMessageSwiped(messageIndex) {
 
         // console.log('[RPG Companion] 🔄 Loaded swipe data for swipe:', currentSwipeId);
     } else {
-        // console.log('[RPG Companion] ℹ️ No stored data for swipe:', currentSwipeId);
+        commitTrackerDataFromPriorMessage(messageIndex);
+        lastGeneratedData.userStats = committedTrackerData.userStats;
+        restoreNumericPayload(readPayload(committedTrackerData.userStats), extensionSettings);
+        // No sibling reply may supply numeric state for an empty swipe.
     }
 
     // Re-render the panels
@@ -782,6 +827,7 @@ export function onMessageSwiped(messageIndex) {
 }
 
 export function onMessageDeleted() {
+    togetherAvatars.invalidate();
     if (!extensionSettings.enabled) {
         return;
     }
@@ -818,6 +864,15 @@ export function updatePersonaAvatar() {
     const portraitImg = document.querySelector('.rpg-user-portrait');
     if (!portraitImg) {
         // console.log('[RPG Companion] Portrait image element not found in DOM');
+        return;
+    }
+
+    // Quiet image prompt generation also invokes this native synchronization.
+    // Keep the confirmed chat portrait instead of overwriting it with a persona.
+    const chatPortrait = activePortrait()?.url;
+    if (chatPortrait) {
+        portraitImg.src = chatPortrait;
+        portraitImg.alt = actionState().player?.name || portraitImg.alt;
         return;
     }
 

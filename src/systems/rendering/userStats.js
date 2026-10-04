@@ -1,3 +1,7 @@
+import { showPortraitPreview } from '../ui/portraitPreview.js';
+import { decoratePlayerPortrait } from '../features/actionPanels.js';
+import { decorateBalancedStats, wantsBalancedLayout } from '../ui/balancedLayout.js';
+import { syncMode, readSheet } from '../generation/numericState.mjs';
 /**
  * User Stats Rendering Module
  * Handles rendering of the user stats panel with progress bars and classic RPG stats
@@ -12,11 +16,12 @@ import {
     $userStatsContainer,
     FALLBACK_AVATAR_DATA_URI
 } from '../../core/state.js';
-import { i18n } from '../../core/i18n.js';
+import { i18n, attributeLabelHtml } from '../../core/i18n.js';
 import {
     saveSettings,
     saveChatData,
-    updateMessageSwipeData
+    updateMessageSwipeData,
+    recordManualNumericEdit
 } from '../../core/persistence.js';
 import { getSafeThumbnailUrl } from '../../utils/avatars.js';
 import { buildInventorySummary } from '../generation/promptBuilder.js';
@@ -197,6 +202,27 @@ function updateUserStatsData() {
  * Includes event listeners for editable fields.
 ```
  */
+function numericControls() {
+    const mode = syncMode(extensionSettings.sheetSyncMode);
+    const source = readSheet(extensionSettings.characterSheetState).source;
+    const label = { unknown: '尚未记录（10/等级1为默认显示）', model: '模型记录', manual: '手动记录', legacy: '旧记录（未核实确认状态）' }[source];
+    return `<div class="rpg-sheet-sync-controls"><label>本聊天人物表同步
+      <select id="rpg-sheet-sync-mode" class="text_pole">
+        <option value="off" ${mode === 'off' ? 'selected' : ''}>关闭自动更新</option>
+        <option value="generic" ${mode === 'generic' ? 'selected' : ''}>通用 RPG</option>
+        <option value="dnd5e" ${mode === 'dnd5e' ? 'selected' : ''}>D&amp;D 5e</option>
+      </select></label><small>${label}；基础属性仅随已确定的人物变化更新。</small></div>`;
+}
+
+function bindNumericControls() {
+    $userStatsContainer.find('#rpg-sheet-sync-mode').on('change', function () {
+        extensionSettings.sheetSyncMode = syncMode($(this).val());
+        saveSettings();
+        saveChatData();
+        renderUserStats();
+    });
+}
+
 export function renderUserStats() {
     if (!extensionSettings.showUserStats || !$userStatsContainer) {
         return;
@@ -213,7 +239,9 @@ export function renderUserStats() {
 
     if (!lastGeneratedData.userStats && !committedTrackerData.userStats) {
         // Always render to the #rpg-user-stats container (mobile layout just moves it around in DOM)
-        $userStatsContainer.html('<div class="rpg-inventory-empty">' + (i18n.getTranslation('userStats.empty') || 'No statuses generated yet') + '</div>');
+        $userStatsContainer.html(numericControls() + '<div class="rpg-inventory-empty">' + (i18n.getTranslation('userStats.empty') || 'No statuses generated yet') + '</div>');
+        bindNumericControls();
+        decorateBalancedStats();
         return;
     }
 
@@ -287,7 +315,7 @@ export function renderUserStats() {
             <img src="${userPortrait}" alt="${userName}" class="rpg-user-portrait" onerror="this.style.opacity='0.5';this.onerror=null;" />
             <span class="rpg-user-name">${userName}</span>
             ${showLevel ? `<span style="opacity: 0.5;">|</span>
-            <span class="rpg-level-label">${i18n.getTranslation('userStats.level') || 'Level'}</span>
+            <span class="rpg-level-label" data-i18n-key="userStats.level">${i18n.getTranslation('userStats.level') || 'Level'}</span>
             <span class="rpg-level-value rpg-editable" contenteditable="true" data-field="level" title="${i18n.getTranslation('userStats.clickToEditLevel') || 'Click to edit level'}">${extensionSettings.level}</span>` : ''}
         </div>
     `;
@@ -295,7 +323,7 @@ export function renderUserStats() {
     // Dynamic stats grid - only show enabled stats
     const showLockIcons = extensionSettings.showLockIcons ?? true;
     if (showLockIcons) {
-        html += `<span class="rpg-section-lock-icon${lockedClass}" data-tracker="userStats" data-path="stats" title="${lockTitle}">${lockIcon}</span>`;
+        html += `<span class="rpg-section-lock-icon${lockedClass}" data-tracker="userStats" data-path="stats" data-i18n-title="${isStatsLocked ? 'userStats.statsLocked' : 'userStats.statsUnlocked'}" title="${lockTitle}">${lockIcon}</span>`;
     }
     html += '<div class="rpg-stats-grid">';
     const enabledStats = config.customStats.filter(stat => stat && stat.enabled && stat.name && stat.id);
@@ -339,7 +367,7 @@ export function renderUserStats() {
         const moodLockedClass = isMoodLocked ? ' locked' : '';
         html += '<div class="rpg-mood">';
         if (showLockIcons) {
-            html += `<span class="rpg-section-lock-icon${moodLockedClass}" data-tracker="userStats" data-path="status" title="${moodLockTitle}">${moodLockIcon}</span>`;
+            html += `<span class="rpg-section-lock-icon${moodLockedClass}" data-tracker="userStats" data-path="status" data-i18n-title="${isMoodLocked ? 'userStats.moodLocked' : 'userStats.moodUnlocked'}" title="${moodLockTitle}">${moodLockIcon}</span>`;
         }
 
         if (config.statusSection.showMoodEmoji) {
@@ -382,7 +410,7 @@ export function renderUserStats() {
             <div class="rpg-skills-section">`;
         if (showLockIcons) {
             html += `
-                <span class="rpg-section-lock-icon${skillsLockedClass}" data-tracker="userStats" data-path="skills" title="${skillsLockTitle}">${skillsLockIcon}</span>`;
+                <span class="rpg-section-lock-icon${skillsLockedClass}" data-tracker="userStats" data-path="skills" data-i18n-title="${isSkillsLocked ? 'userStats.skillsLocked' : 'userStats.skillsUnlocked'}" title="${skillsLockTitle}">${skillsLockIcon}</span>`;
         }
         html += `
                 <span class="rpg-skills-label">${config.skillsSection.label}:</span>
@@ -420,7 +448,7 @@ export function renderUserStats() {
                 const value = extensionSettings.classicStats[attr.id] !== undefined ? extensionSettings.classicStats[attr.id] : 10;
                 html += `
                         <div class="rpg-classic-stat" data-stat="${attr.id}">
-                            <span class="rpg-classic-stat-label">${attr.name}</span>
+                            <span class="rpg-classic-stat-label">${attributeLabelHtml(attr.id, attr.name)}</span>
                             <div class="rpg-classic-stat-buttons">
                                 <button class="rpg-classic-stat-btn rpg-stat-decrease" data-stat="${attr.id}">−</button>
                                 <span class="rpg-classic-stat-value">${value}</span>
@@ -445,7 +473,17 @@ export function renderUserStats() {
     // console.log('[RPG UserStats Render] Container exists:', !!$userStatsContainer, '$userStatsContainer length:', $userStatsContainer?.length);
 
     // Always render to the #rpg-user-stats container (mobile layout just moves it around in DOM)
-    $userStatsContainer.html(html);
+    $userStatsContainer.html(numericControls() + html);
+    decoratePlayerPortrait();
+    if (wantsBalancedLayout()) {
+        const portrait=$userStatsContainer[0]?.querySelector('.rpg-user-portrait');
+        if (portrait) {
+            portrait.tabIndex=0; portrait.setAttribute('role','button'); portrait.title=i18n.getTranslation('layout.viewPortrait') || 'View portrait';
+            portrait.addEventListener('click',()=>showPortraitPreview(portrait.getAttribute('src'),portrait.alt));
+            portrait.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();portrait.click();}});
+        }
+    }
+    bindNumericControls();
     // console.log('[RPG UserStats Render] ✓ HTML rendered to #rpg-user-stats container');
 
     // Add event listeners for editable stat values
@@ -565,6 +603,7 @@ export function renderUserStats() {
         value = Math.min(100, value);
 
         extensionSettings.level = value;
+        recordManualNumericEdit('level', value);
         saveSettings();
         saveChatData();
         updateMessageSwipeData();
@@ -582,7 +621,7 @@ export function renderUserStats() {
     });
 
     // Add event listener for section lock icon clicks (support both click and touch)
-    $('.rpg-section-lock-icon').on('click touchend', function (e) {
+    $userStatsContainer.find('.rpg-section-lock-icon').on('click touchend', function (e) {
         e.preventDefault();
         e.stopPropagation();
         const $icon = $(this);
@@ -595,8 +634,11 @@ export function renderUserStats() {
 
         // Update icon
         const newIcon = !currentlyLocked ? '🔒' : '🔓';
-        const newTitle = !currentlyLocked ? (i18n.getTranslation('infoBox.locked') || 'Locked') : (i18n.getTranslation('infoBox.unlocked') || 'Unlocked');
+        const kind = {stats:'stats',status:'mood',skills:'skills'}[itemPath];
+        const titleKey = kind ? `userStats.${kind}${!currentlyLocked ? 'Locked' : 'Unlocked'}` : `infoBox.${!currentlyLocked ? 'locked' : 'unlocked'}`;
+        const newTitle = i18n.getTranslation(titleKey) || (!currentlyLocked ? 'Locked' : 'Unlocked');
         $icon.text(newIcon);
+        $icon.attr('data-i18n-title', titleKey);
         $icon.attr('title', newTitle);
 
         // Toggle 'locked' class for persistent visibility
@@ -605,4 +647,5 @@ export function renderUserStats() {
         // Save settings
         saveSettings();
     });
+    decorateBalancedStats();
 }

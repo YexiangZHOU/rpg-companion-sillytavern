@@ -25,7 +25,7 @@ import { saveChatData, setMessageSwipeTrackerData } from '../../core/persistence
 import {
     generateSeparateUpdatePrompt
 } from './promptBuilder.js';
-import { parseResponse, parseUserStats } from './parser.js';
+import { parseResponse, parseUserStats, prepareNumericUserStats } from './parser.js';
 import { parseAndStoreSpotifyUrl } from '../features/musicPlayer.js';
 import { renderUserStats } from '../rendering/userStats.js';
 import { renderInfoBox } from '../rendering/infoBox.js';
@@ -274,6 +274,9 @@ export async function updateRPGData(renderUserStats, renderInfoBox, renderThough
         if (response) {
             // console.log('[RPG Companion] Raw AI response:', response);
             const parsedData = parseResponse(response);
+            if (extensionSettings.showUserStats) {
+                parsedData.userStats = prepareNumericUserStats(parsedData.userStats || '{}');
+            }
 
             // Check if parsing completely failed (no tracker data found)
             if (parsedData.parsingFailed) {

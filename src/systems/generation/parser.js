@@ -1,3 +1,5 @@
+import { normalizeNumericPayload, restoreNumericPayload } from './numericState.mjs';
+import { committedTrackerData } from '../../core/state.js';
 /**
  * Parser Module
  * Handles parsing of AI responses to extract tracker data
@@ -650,6 +652,13 @@ export function parseResponse(responseText, options = {}) {
  *
  * @param {string} statsText - The raw stats text from AI response
  */
+export function prepareNumericUserStats(text) {
+    const data = repairJSON(text || '{}');
+    if (!data || Array.isArray(data)) return text;
+    const prior = repairJSON(committedTrackerData.userStats || '{}') || {};
+    return JSON.stringify(normalizeNumericPayload(data, prior, extensionSettings));
+}
+
 export function parseUserStats(statsText) {
     debugLog('[RPG Parser] ==================== PARSING USER STATS ====================');
     debugLog('[RPG Parser] Stats text length:', statsText.length + ' chars');
@@ -664,16 +673,7 @@ export function parseUserStats(statsText) {
             if (statsData) {
                 debugLog('[RPG Parser] ✓ Parsed as v3 JSON format');
 
-                // Extract stats from v3 JSON structure
-                if (statsData.stats && Array.isArray(statsData.stats)) {
-                    // console.log('[RPG Parser] ✓ Extracting stats array, count:', statsData.stats.length);
-                    statsData.stats.forEach(stat => {
-                        if (stat.id && typeof stat.value !== 'undefined') {
-                            extensionSettings.userStats[stat.id] = stat.value;
-                            // console.log(`[RPG Parser] ✓ Set ${stat.id} = ${stat.value}`);
-                        }
-                    });
-                }
+                restoreNumericPayload(statsData, extensionSettings);
 
                 // Extract status
                 if (statsData.status) {

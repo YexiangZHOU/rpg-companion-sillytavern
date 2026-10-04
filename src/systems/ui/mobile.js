@@ -1,3 +1,4 @@
+import { wantsBalancedLayout } from './balancedLayout.js';
 /**
  * Mobile UI Module
  * Handles mobile-specific UI functionality: FAB dragging, tabs, keyboard handling
@@ -7,7 +8,7 @@ import { extensionSettings, committedTrackerData, lastGeneratedData } from '../.
 import { saveSettings } from '../../core/persistence.js';
 import { closeMobilePanelWithAnimation, updateCollapseToggleIcon } from './layout.js';
 import { setupDesktopTabs, removeDesktopTabs } from './desktop.js';
-import { i18n } from '../../core/i18n.js';
+import { i18n, attributeLabelHtml } from '../../core/i18n.js';
 import { hexToRgba } from './theme.js';
 
 /**
@@ -386,8 +387,9 @@ export function setupMobileToggle() {
     let wasMobile = window.innerWidth <= 1000;
     let resizeTimer;
 
-    $(window).on('resize', function() {
+    $(window).off('resize.rpgLegacyLayout').on('resize.rpgLegacyLayout', function() {
         clearTimeout(resizeTimer);
+        if (wantsBalancedLayout()) { wasMobile = window.innerWidth <= 1000; return; }
 
         const isMobile = window.innerWidth <= 1000;
         const $panel = $('#rpg-companion-panel');
@@ -442,6 +444,7 @@ export function setupMobileToggle() {
 
         // For mobile to desktop transition, use debounce
         resizeTimer = setTimeout(function() {
+            if (wantsBalancedLayout()) return;
             const isMobile = window.innerWidth <= 1000;
 
             // Transitioning from mobile to desktop
@@ -584,6 +587,7 @@ export function constrainFabToViewport() {
  * Only runs on mobile viewports (<=1000px).
  */
 export function setupMobileTabs() {
+    if (wantsBalancedLayout()) return;
     const isMobile = window.innerWidth <= 1000;
     if (!isMobile) return;
 
@@ -718,6 +722,7 @@ export function setupMobileTabs() {
  * Removes mobile tab navigation and restores desktop layout.
  */
 export function removeMobileTabs() {
+    if (document.querySelector('.rpg-balanced')) return;
     // Get sections from tabs before removing
     const $userStats = $('#rpg-user-stats').detach();
     const $infoBox = $('#rpg-info-box').detach();
@@ -1485,7 +1490,7 @@ export function updateFabWidgets() {
                     }
                     return true;
                 })
-                .map(([key, value]) => `<div class="rpg-fab-widget-attr-item"><span class="rpg-fab-widget-attr-name">${key.toUpperCase()}</span><span class="rpg-fab-widget-attr-value">${value}</span></div>`)
+                .map(([key, value]) => `<div class="rpg-fab-widget-attr-item"><span class="rpg-fab-widget-attr-name">${attributeLabelHtml(key, configuredAttrs.find(attr => attr.id === key)?.name)}</span><span class="rpg-fab-widget-attr-value">${value}</span></div>`)
                 .join('');
 
             if (attrItems) {

@@ -1,3 +1,5 @@
+import { npcStatusConfig } from '../../utils/npcStatus.mjs';
+import { numericInstructions } from './numericState.mjs';
 /**
  * Prompt Builder Module
  * Handles all AI prompt generation for RPG tracker data
@@ -349,6 +351,10 @@ export function generateTrackerInstructions(includeHtmlPrompt = true, includeCon
             instructions += `Consider the last trackers in the conversation (if they exist). Manage them accordingly and realistically; raise, lower, change, or keep the values unchanged based on the user's actions, the passage of time, and logical consequences.`;
         }
 
+        if (extensionSettings.showUserStats) {
+            instructions += numericInstructions(extensionSettings, committedTrackerData.userStats);
+        }
+
         // Add lock instruction
         instructions += addLockInstruction('');
 
@@ -416,21 +422,6 @@ export function generateTrackerInstructions(includeHtmlPrompt = true, includeCon
             }
         }
 
-        // Add dice roll context if there was one (independent of attributes)
-        if (extensionSettings.lastDiceRoll) {
-            const roll = extensionSettings.lastDiceRoll;
-            const showRPGAttributes = trackerConfig?.userStats?.showRPGAttributes !== false;
-            const alwaysSendAttributes = trackerConfig?.userStats?.alwaysSendAttributes;
-            const hasAttributes = includeAttributes && (alwaysSendAttributes && showRPGAttributes);
-
-            if (hasAttributes) {
-                instructions += `${userName} rolled ${roll.total} on the last ${roll.formula} roll. Based on their attributes, decide whether they succeeded or failed the action they attempted.\n\n`;
-            } else {
-                instructions += `${userName} rolled ${roll.total} on the last ${roll.formula} roll. Decide whether they succeeded or failed the action they attempted.\n\n`;
-            }
-        } else if (includeAttributes && trackerConfig?.userStats?.alwaysSendAttributes && trackerConfig?.userStats?.showRPGAttributes !== false) {
-            instructions += `\n`;
-        }
     }
 
     // Append HTML prompt if enabled AND includeHtmlPrompt is true
@@ -461,6 +452,9 @@ export function generateTrackerInstructions(includeHtmlPrompt = true, includeCon
         instructions += spotifyPrompt + ' ' + SPOTIFY_FORMAT_INSTRUCTION;
     }
 
+    if(isPresentCharactersEnabled() && extensionSettings.npcStatusEnabled !== false) {
+        instructions+='\nNPC basic status: Health and Energy are percentages from 0 to 100, not D&D HP totals. Return a number only when supported by known game state; otherwise use null. Preserve known prior values unless the story supplies a reason to change them. Conditions describe observable abnormal states; use None only when known clear, Unknown when unestablished. Never invent damage, fatigue or recovery; respect all existing locks.';
+    }
     return instructions;
 }
 
@@ -980,7 +974,7 @@ export function formatHistoricalTrackerData(trackerData, trackerConfig, userName
 
         // Process characterThoughts if present and has persistence-enabled fields
         if (trackerData.characterThoughts) {
-            const charsConfig = trackerConfig.presentCharacters;
+            const charsConfig = npcStatusConfig(trackerConfig.presentCharacters,extensionSettings.npcStatusEnabled !== false);
             const charsData = typeof trackerData.characterThoughts === 'string'
                 ? JSON.parse(trackerData.characterThoughts)
                 : trackerData.characterThoughts;
@@ -1081,19 +1075,6 @@ export function generateContextualSummary() {
     if (shouldSendAttributes) {
         const attributesString = buildAttributesString();
         summary += `${userName}'s attributes: ${attributesString}\n`;
-    }
-
-    // Add dice roll context if there was one (independent of attributes)
-    if (extensionSettings.lastDiceRoll) {
-        const roll = extensionSettings.lastDiceRoll;
-
-        if (shouldSendAttributes) {
-            summary += `${userName} rolled ${roll.total} on the last ${roll.formula} roll. Based on their attributes, decide whether they succeeded or failed the action they attempted.\n\n`;
-        } else {
-            summary += `${userName} rolled ${roll.total} on the last ${roll.formula} roll. Decide whether they succeeded or failed the action they attempted.\n\n`;
-        }
-    } else if (shouldSendAttributes) {
-        summary += `\n`;
     }
 
     return summary.trim();

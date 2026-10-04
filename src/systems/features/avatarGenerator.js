@@ -10,6 +10,7 @@
  */
 
 import { characters, this_chid } from '../../../../../../../script.js';
+import { withAvatarJob } from './avatarQueue.mjs';
 import { safeGenerateRaw } from '../../utils/responseExtractor.js';
 import { executeSlashCommandsOnChatInput } from '../../../../../../../scripts/slash-commands.js';
 import { selected_group, getGroupMembers } from '../../../../../../group-chats.js';
@@ -124,15 +125,16 @@ export function hasExistingAvatar(characterName) {
  *
  * @param {string[]} characterNames - Array of character names to generate avatars for
  * @param {Function} onStarted - Optional callback when generation starts (to update UI)
+ * @param {{shouldContinue?: function(): boolean}} options - Optional guard for a specific reply
  * @returns {Promise<void>} Resolves when all generations complete
  */
-export async function generateAvatarsForCharacters(characterNames, onStarted = null) {
-    if (!extensionSettings.autoGenerateAvatars) {
+export async function generateAvatarsForCharacters(characterNames, onStarted = null, { shouldContinue = () => true } = {}) {
+    if (!extensionSettings.autoGenerateAvatars || !shouldContinue()) {
         return;
     }
 
     // Filter to characters that need avatars
-    const needsGeneration = characterNames.filter(name => {
+    const needsGeneration = [...new Set(characterNames)].filter(name => {
         // Skip if already pending
         if (pendingGenerations.has(name)) {
             return false;
@@ -167,6 +169,7 @@ export async function generateAvatarsForCharacters(characterNames, onStarted = n
     try {
         // Generate images one at a time, generating prompt on demand
         for (const characterName of needsGeneration) {
+            if (!shouldContinue()) break;
             // Skip if somehow already has avatar now
             if (hasExistingAvatar(characterName)) {
                 pendingGenerations.delete(characterName);
@@ -174,10 +177,11 @@ export async function generateAvatarsForCharacters(characterNames, onStarted = n
             }
 
             // Generate LLM prompt for this character
-            const prompt = await generateAvatarPrompt(characterName);
-
-            // Generate the image using the prompt
-            await generateSingleAvatar(characterName, prompt);
+            await withAvatarJob(async () => {
+                const prompt = await generateAvatarPrompt(characterName, shouldContinue);
+                if (!shouldContinue() || hasExistingAvatar(characterName)) return;
+                await generateSingleAvatar(characterName, prompt, shouldContinue);
+            }, () => extensionSettings.autoGenerateAvatars && shouldContinue() && !hasExistingAvatar(characterName));
 
             pendingGenerations.delete(characterName);
 
@@ -223,10 +227,10 @@ export async function regenerateAvatar(characterName) {
 
     try {
         // Generate new LLM prompt
-        const prompt = await generateAvatarPrompt(characterName);
-
-        // Generate the avatar
-        return await generateSingleAvatar(characterName, prompt);
+        return await withAvatarJob(async () => {
+            const prompt = await generateAvatarPrompt(characterName);
+            return await generateSingleAvatar(characterName, prompt);
+        });
     } finally {
         // Remove from pending when done
         pendingGenerations.delete(characterName);
@@ -239,7 +243,8 @@ export async function regenerateAvatar(characterName) {
  * @param {string} characterName - Name of character
  * @returns {Promise<string|null>} Generated prompt or null if failed
  */
-async function generateAvatarPrompt(characterName) {
+async function generateAvatarPrompt(characterName, shouldContinue = () => true) {
+    if (!shouldContinue()) return null;
     // Check cache first if not forcing regeneration
     if (sessionAvatarPrompts[characterName]) {
         return sessionAvatarPrompts[characterName];
@@ -249,6 +254,7 @@ async function generateAvatarPrompt(characterName) {
         // console.log('[RPG Avatar] Generating LLM prompt for:', characterName);
 
         const promptMessages = await generateAvatarPromptGenerationPrompt(characterName);
+        if (!shouldContinue()) return null;
         let response;
 
         if (extensionSettings.generationMode === 'external') {
@@ -261,7 +267,7 @@ async function generateAvatarPrompt(characterName) {
             });
         }
 
-        if (response) {
+        if (response && shouldContinue()) {
             const prompt = response.trim();
             // console.log(`[RPG Avatar] Generated prompt for ${characterName}:`, prompt);
 
@@ -307,7 +313,9 @@ function buildFallbackPrompt(characterName) {
  * @param {string|null} prompt - The prompt to use (optional, will fallback if null)
  * @returns {Promise<string|null>} Avatar URL or null if failed
  */
-async function generateSingleAvatar(characterName, prompt = null) {
+async function generateSingleAvatar(characterName, prompt = null, shouldContinue = () => true) {
+    if (!shouldContinue()) return null;
+    const originalAvatar = extensionSettings.npcAvatars?.[characterName];
     // Use provided prompt, or check cache, or build fallback
     if (!prompt) {
         prompt = sessionAvatarPrompts[characterName];
@@ -327,10 +335,15 @@ async function generateSingleAvatar(characterName, prompt = null) {
             { clearChatInput: false }
         );
 
+        // A request already sent can finish after navigation. Do not attach it to stale state.
+        if (!shouldContinue()) return null;
+
         // Extract image URL from result
         const imageUrl = extractImageUrl(result);
 
-        if (imageUrl) {
+        if (imageUrl && shouldContinue()) {
+            const currentAvatar = extensionSettings.npcAvatars?.[characterName];
+            if (currentAvatar && currentAvatar !== originalAvatar) return currentAvatar;
             // Store the avatar
             if (!extensionSettings.npcAvatars) {
                 extensionSettings.npcAvatars = {};

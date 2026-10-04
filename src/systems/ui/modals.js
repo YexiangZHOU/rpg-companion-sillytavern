@@ -1,3 +1,4 @@
+import { eventSource, event_types, getCurrentChatId } from '../../../../../../../script.js';
 /**
  * Modal Management Module
  * Handles DiceModal and SettingsModal ES6 classes with state management
@@ -23,6 +24,7 @@ import { renderThoughts, updateChatThoughts } from '../rendering/thoughts.js';
 import { renderQuests } from '../rendering/quests.js';
 import { renderInventory } from '../rendering/inventory.js';
 import {
+    saveFreeRoll,
     rollDice as rollDiceCore,
     clearDiceRoll as clearDiceRollCore,
     updateDiceDisplay as updateDiceDisplayCore,
@@ -43,6 +45,8 @@ export class DiceModal {
         this.resultDetails = document.getElementById('rpg-dice-result-details');
         this.rollBtn = document.getElementById('rpg-dice-roll-btn');
 
+        this.sequence=0; this.closeTimer=null; this.rollMetadata=null;
+        this.saveBtn=document.getElementById('rpg-dice-save-btn');
         this.state = 'IDLE'; // IDLE, ROLLING, SHOWING_RESULT
         this.isAnimating = false;
     }
@@ -51,7 +55,9 @@ export class DiceModal {
      * Opens the modal with proper animation
      */
     open() {
-        if (this.isAnimating) return;
+        clearTimeout(this.closeTimer); this.isAnimating=false; this.sequence++;
+        setPendingDiceRoll(null); this.rollMetadata=null;
+        this.resultValue.textContent=''; this.resultDetails.textContent='';
 
         // Apply theme
         const theme = extensionSettings.theme;
@@ -77,20 +83,11 @@ export class DiceModal {
      * Closes the modal with animation
      */
     close() {
-        if (this.isAnimating) return;
-
-        this.isAnimating = true;
-        this.modal.classList.add('is-closing');
-        this.modal.classList.remove('is-open');
-
-        // Wait for animation to complete
-        setTimeout(() => {
-            this.modal.classList.remove('is-closing');
-            this.isAnimating = false;
-
-            // Clear pending roll
-            setPendingDiceRoll(null);
-        }, 200);
+        this.sequence++; setPendingDiceRoll(null); this.rollMetadata=null;
+        this._setState('IDLE'); clearTimeout(this.closeTimer);
+        this.modal.classList.add('is-closing'); this.modal.classList.remove('is-open');
+        const token=this.sequence;
+        this.closeTimer=setTimeout(()=>{if(token===this.sequence)this.modal.classList.remove('is-closing');},200);
     }
 
     /**
@@ -131,6 +128,8 @@ export class DiceModal {
      */
     _setState(newState) {
         this.state = newState;
+        this.saveBtn.disabled = newState !== 'SHOWING_RESULT';
+        this.rollBtn.disabled = newState === 'ROLLING';
 
         switch (newState) {
             case 'IDLE':
@@ -301,14 +300,11 @@ export function setupDiceRoller() {
 
     // Save roll button (closes popup and saves the roll)
     $('#rpg-dice-save-btn').on('click', function() {
-        // Save the pending roll
         const roll = getPendingDiceRoll();
-        if (roll) {
-            extensionSettings.lastDiceRoll = roll;
-            saveSettings();
-            updateDiceDisplayCore();
-            setPendingDiceRoll(null);
-        }
+        if (!roll || diceModal.state !== 'SHOWING_RESULT') { toastr.warning('请先完成本次投掷'); return; }
+        if (diceModal.rollMetadata !== getContext().chatMetadata || diceModal.rollChatKey !== getCurrentChatId()) { diceModal.close(); toastr.warning('聊天已切换，本次投掷已取消'); return; }
+        saveFreeRoll(roll);
+        setPendingDiceRoll(null);
         closeDicePopup();
     });
 
@@ -326,6 +322,8 @@ export function setupDiceRoller() {
     });
     $('#rpg-clear-dice').attr('title', i18n.getTranslation('template.mainPanel.clearLastRoll') || 'Clear last roll');
 
+    eventSource.on(event_types.CHAT_CHANGED,()=>diceModal.close());
+    diceModal._setState('IDLE');
     return diceModal;
 }
 

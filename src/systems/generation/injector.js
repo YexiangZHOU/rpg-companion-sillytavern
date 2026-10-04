@@ -32,6 +32,23 @@ import {
 import { restoreCheckpointOnLoad } from '../features/chapterCheckpoint.js';
 import { commitTrackerDataFromPriorMessage } from '../../core/persistence.js';
 
+// Presentation only: preserve tracker protocols and all existing state updates.
+function narrativePresentationInstructions() {
+    const panelActive=extensionSettings.showUserStats || extensionSettings.showInfoBox
+        || extensionSettings.showCharacterThoughts || extensionSettings.showAlternatePresentCharactersPanel;
+    if(!panelActive)return '';
+    return `
+[RPG正文呈现规则]
+继续遵循原有跟踪数据格式、字段、锁和掷骰协议；本规则仅调整给玩家阅读的正文，不减少或省略结构化跟踪更新。
+普通剧情回复侧重行动、对话、氛围、动态及有意义的变化。不要在正文末尾重复附整套“【状态】”、环境清单或人物表，也不要逐项复述面板已可靠记录且没有变化的信息。必要的场景描写仍可自然融入叙事，不必只写数据差异。
+遇到战斗、检定、资源消耗或危险时，清楚说明行动所需及已发生变化的关键数值，例如检定结果与DC、伤害、具体剩余HP、AC、法术位、专注和异常状态。仅报告已有依据的数据；生命或精力百分比不能当作D&D的绝对HP，缺失数值不推算或编造。
+数值变化结算是必选项：只要本轮已确认发生伤害、治疗、消耗或恢复资源，即使玩家只问剧情或NPC对话，也必须在给玩家看的正文中写一句简短结算，列出发生变化的项目和确切剩余量；不要把这句藏在跟踪JSON或NPC内心想法里。例：受到2点伤害，HP 8/8→6/8；消耗1个1级法术位，剩余1/2。这是格式示例，不是当前事实，实际数字只用本轮已确认信息。只写变动项目，不附整套未变状态；面板百分比更新不能代替绝对HP、法术位等未覆盖数值的正文结算。输出前检查：已确认数值变化是否都在正文短句中交代，遗漏则补上。
+仅省略已启用面板中能可靠查看的重复信息。面板未覆盖、尚未知或相应跟踪器关闭时，正文仍交代玩家当前决策所需的信息。玩家明确要求完整状态、人物表、规则解释或回顾时，正常提供。
+这条正文排版规则替代角色卡中“每轮必须完整附状态/环境汇总”的排版要求；角色设定、游戏规则、检定请求及真实骰点回传仍按原约定处理，不能在掷骰结果到达前判定或编造结果。
+[/RPG正文呈现规则]
+`;
+}
+
 // Track suppression state for event handler
 let currentSuppressionState = false;
 
@@ -591,6 +608,11 @@ export async function onGenerationStarted(type, data, dryRun) {
     // Evaluate suppression using the shared helper
     const suppression = evaluateSuppression(extensionSettings, context, data);
     const { shouldSuppress, skipMode, isGuidedGeneration, isImpersonationGeneration, hasQuietPrompt, instructContent, quietPromptRaw, matchedPattern } = suppression;
+    // Keep prose instructions out of quiet/background tracker and impersonation calls.
+    const narrativeInstructions= !isGenerating && type !== 'quiet' && type !== 'impersonate'
+        && !hasQuietPrompt && !shouldSuppress && !isGuidedGeneration && !isImpersonationGeneration
+        ? narrativePresentationInstructions() : '';
+
 
     if (shouldSuppress) {
         // Debugging: indicate active suppression and which source triggered it
@@ -634,7 +656,7 @@ export async function onGenerationStarted(type, data, dryRun) {
         // Add only 1 newline after the closing ``` (ST adds its own newline when injecting)
         const example = exampleRaw ? `\`\`\`json\n${exampleRaw}\n\`\`\`\n` : null;
         // Don't include HTML prompt in instructions - inject it separately to avoid duplication on swipes
-        const instructions = generateTrackerInstructions(false, true);
+        const instructions = generateTrackerInstructions(false, true) + narrativeInstructions;
 
         // Clear separate mode context injection - we don't use contextual summary in together mode
         setExtensionPrompt('rpg-companion-context', '', extension_prompt_types.IN_CHAT, 1, false);
@@ -762,7 +784,7 @@ export async function onGenerationStarted(type, data, dryRun) {
 
         if (contextSummary) {
             // Use custom context instructions prompt if set, otherwise use default
-            const contextInstructionsText = extensionSettings.customContextInstructionsPrompt || DEFAULT_CONTEXT_INSTRUCTIONS_PROMPT;
+            const contextInstructionsText = (extensionSettings.customContextInstructionsPrompt || DEFAULT_CONTEXT_INSTRUCTIONS_PROMPT) + narrativeInstructions;
 
             const wrappedContext = `
 <context>

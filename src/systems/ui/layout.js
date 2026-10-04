@@ -1,3 +1,4 @@
+import { wantsBalancedLayout, refreshBalancedLayout, decorateBalancedStats } from './balancedLayout.js';
 /**
  * Layout Management Module
  * Handles panel visibility, section visibility, collapse/expand toggle, and panel positioning
@@ -369,6 +370,8 @@ export function updateSectionVisibility() {
         $('#rpg-divider-quests').hide();
     }
 
+    if (wantsBalancedLayout()) { refreshBalancedLayout(); decorateBalancedStats(); return; }
+
     // Rebuild tabs to reflect visibility changes for inventory and quests
     const isMobile = window.innerWidth <= 1000;
     const hasMobileTabs = $('.rpg-mobile-container').length > 0;
@@ -405,6 +408,7 @@ export function updateSectionVisibility() {
  * Applies the selected panel position.
  */
 export function applyPanelPosition() {
+    if (wantsBalancedLayout()) { refreshBalancedLayout(); return; }
     if (!$panelContainer) return;
 
     const isMobile = window.innerWidth <= 1000;

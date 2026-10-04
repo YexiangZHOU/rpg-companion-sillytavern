@@ -1,3 +1,4 @@
+import { readPayload, readSheet, legacySheet, emptySheet, syncMode, restoreNumericPayload, manualSheetEdit } from '../systems/generation/numericState.mjs';
 /**
  * Core Persistence Module
  * Handles saving/loading extension settings and chat data
@@ -443,6 +444,7 @@ export function restoreLatestTrackerStateFromChat(chatMessages) {
         return false;
     }
 
+    restoreNumericPayload(readPayload(latestData.userStats), extensionSettings);
     setLastGeneratedData({
         userStats: latestData.userStats || null,
         infoBox: latestData.infoBox || null,
@@ -713,7 +715,11 @@ export function saveChatData() {
 
     chat_metadata.rpg_companion = {
         userStats: extensionSettings.userStats,
-        classicStats: extensionSettings.classicStats,
+        classicStats: { ...extensionSettings.classicStats },
+        level: extensionSettings.level,
+        sheetSyncMode: syncMode(extensionSettings.sheetSyncMode),
+        characterSheetState: readSheet(extensionSettings.characterSheetState),
+        numericBaseline: readSheet(extensionSettings.numericBaseline),
         quests: extensionSettings.quests,
         lastGeneratedData: lastGeneratedData,
         committedTrackerData: committedTrackerData,
@@ -758,7 +764,30 @@ export function mirrorToSwipeInfo(message, swipeId, swipeEntry) {
  * Updates the last assistant message's swipe data with current tracker data.
  * This ensures user edits are preserved across swipes and included in generation context.
  */
+export function recordManualNumericEdit(field, value) {
+    const customIds = (extensionSettings.trackerConfig?.userStats?.rpgAttributes || []).map(a => a?.id);
+    const sheet = manualSheetEdit(extensionSettings.characterSheetState, field, value, customIds);
+    extensionSettings.characterSheetState = sheet;
+    const current = readPayload(lastGeneratedData.userStats || committedTrackerData.userStats);
+    if (!current.characterSheet) extensionSettings.numericBaseline = readSheet(sheet);
+    const payload = { ...current, characterSheet: sheet };
+    if (!Array.isArray(payload.stats)) {
+        payload.stats = (extensionSettings.trackerConfig?.userStats?.customStats || [])
+            .filter(s => s?.enabled && s.id && s.name)
+            .map(s => ({ id: s.id, name: s.name, value: extensionSettings.userStats[s.id] ?? (s.id === 'arousal' ? 0 : 100) }));
+    }
+    lastGeneratedData.userStats = JSON.stringify(payload);
+    committedTrackerData.userStats = lastGeneratedData.userStats;
+    updateMessageSwipeData();
+}
+
 export function updateMessageSwipeData() {
+    const data = readPayload(lastGeneratedData.userStats);
+    if (Object.keys(data).length) {
+        data.characterSheet = readSheet(extensionSettings.characterSheetState);
+        lastGeneratedData.userStats = JSON.stringify(data);
+        committedTrackerData.userStats = lastGeneratedData.userStats;
+    }
     const chat = getContext().chat;
     if (!chat || chat.length === 0) {
         return;
@@ -827,6 +856,11 @@ function resolveActiveSwipeId(message) {
     }
 
     const currentText = typeof message?.mes === 'string' ? message.mes : '';
+    // ST can point at a pending swipe beyond the existing array. Do not clamp
+    // that slot to a sibling reply while preparing its generation context.
+    if (fallbackSwipeId >= swipes.length && (!currentText || currentText === '...')) {
+        return fallbackSwipeId;
+    }
     if (currentText) {
         for (let i = swipes.length - 1; i >= 0; i--) {
             if (typeof swipes[i] === 'string' && swipes[i] === currentText) {
@@ -949,6 +983,11 @@ export function inheritSwipeDataFromPriorMessage(message, messageIndex) {
  */
 export function loadChatData() {
     const savedData = chat_metadata?.rpg_companion;
+    // Account settings are not authoritative for this chat's character sheet.
+    extensionSettings.sheetSyncMode = syncMode(savedData?.sheetSyncMode);
+    extensionSettings.numericBaseline = savedData?.numericBaseline
+        ? readSheet(savedData.numericBaseline) : (savedData ? legacySheet(savedData) : emptySheet());
+    restoreNumericPayload({ characterSheet: savedData?.characterSheetState || extensionSettings.numericBaseline }, extensionSettings);
 
     if (!savedData) {
         // Reset to defaults if no metadata exists, then try to rebuild from message swipe data below.

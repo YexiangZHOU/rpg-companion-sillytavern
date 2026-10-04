@@ -1,3 +1,5 @@
+import { openNativeEncounter,draftNativeAction,closeNativeEncounter } from '../features/encounterAdapter.js';
+import { actionState,activePortrait } from '../features/actionStore.js';
 /**
  * Encounter UI Module
  * Manages the combat encounter modal window and interactions
@@ -43,17 +45,7 @@ export class EncounterModal {
      * Opens the encounter modal and initializes combat
      */
     async open() {
-        if (this.isInitializing) return;
-
-        // Always show configuration modal (it will pre-populate with saved values if they exist)
-        const configured = await this.showNarrativeConfigModal();
-        if (!configured) {
-            // User cancelled
-            return;
-        }
-
-        // Proceed with encounter initialization
-        await this.initialize();
+        return openNativeEncounter(this);
     }
 
     /**
@@ -308,8 +300,9 @@ export class EncounterModal {
                             <button id="rpg-encounter-conclude" class="rpg-encounter-conclude-btn" title="${i18n.getTranslation('encounter.ui.concludeEncounterTitle') || 'Conclude encounter early'}">
                                 <i class="fa-solid fa-flag-checkered"></i> ${i18n.getTranslation('encounter.ui.concludeEncounterButton') || 'Conclude Encounter'}
                             </button>
-                            <button id="rpg-encounter-close" class="rpg-encounter-close-btn" title="${i18n.getTranslation('encounter.ui.closeTitle') || 'Close (ends combat)'}">
+                            <button id="rpg-encounter-close" class="rpg-encounter-close-btn" title="${i18n.getTranslation('actions.close') || 'Hide'}">
                                 <i class="fa-solid fa-times"></i>
+                                <span>${i18n.getTranslation('actions.close') || 'Hide'}</span>
                             </button>
                         </div>
                     </div>
@@ -337,16 +330,12 @@ export class EncounterModal {
         });
 
         this.modal.querySelector('#rpg-encounter-close').addEventListener('click', () => {
-            if (confirm(i18n.getTranslation('encounter.ui.confirmEndCombat') || 'Are you sure you want to end this combat encounter?')) {
-                this.close();
-            }
+            this.close();
         });
 
         // Close on overlay click
         this.modal.querySelector('.rpg-encounter-overlay').addEventListener('click', () => {
-            if (confirm(i18n.getTranslation('encounter.ui.confirmEndCombat') || 'Are you sure you want to end this combat encounter?')) {
-                this.close();
-            }
+            this.close();
         });
     }
 
@@ -362,7 +351,7 @@ export class EncounterModal {
         mainContent.style.display = 'block';
 
         const context = getContext();
-        const userName = context.name1;
+        const userName = actionState().player?.name ?? context.name1;
 
         let html = `
             <div class="rpg-encounter-battlefield">
@@ -415,8 +404,8 @@ export class EncounterModal {
      */
     renderEnemies(enemies) {
         return enemies.map((enemy, index) => {
-            const hpPercent = (enemy.hp / enemy.maxHp) * 100;
-            const isDead = enemy.hp <= 0;
+            const hpPercent = enemy.maxHp ? (enemy.hp / enemy.maxHp) * 100 : 0;
+            const isDead = enemy.hp !== null && enemy.hp <= 0;
 
             // Try to find avatar for enemy (they might be a character from the chat or Present Characters)
             const avatarUrl = this.getCharacterAvatar(enemy.name);
@@ -434,7 +423,7 @@ export class EncounterModal {
                         <h4>${enemy.name}</h4>
                         <div class="rpg-encounter-hp-bar">
                             <div class="rpg-encounter-hp-fill" style="width: ${hpPercent}%"></div>
-                            <span class="rpg-encounter-hp-text">${enemy.hp}/${enemy.maxHp}${i18n.getTranslation('encounter.ui.hpSuffix') || ' HP'}</span>
+                            <span class="rpg-encounter-hp-text">${enemy.hp ?? '?'} / ${enemy.maxHp ?? '?'}${i18n.getTranslation('encounter.ui.hpSuffix') || ' HP'}</span>
                         </div>
                         ${enemy.statuses && enemy.statuses.length > 0 ? `
                             <div class="rpg-encounter-statuses">
@@ -457,16 +446,14 @@ export class EncounterModal {
         const context = getContext();
 
         return party.map((member, index) => {
-            const hpPercent = (member.hp / member.maxHp) * 100;
-            const isDead = member.hp <= 0;
+            const hpPercent = member.maxHp ? (member.hp / member.maxHp) * 100 : 0;
+            const isDead = member.hp !== null && member.hp <= 0;
 
             // Get avatar for party member
             let avatarUrl = '';
             if (member.isPlayer) {
                 // Get user/persona avatar using user_avatar like userStats does
-                if (user_avatar) {
-                    avatarUrl = getSafeThumbnailUrl('persona', user_avatar);
-                }
+                avatarUrl = activePortrait()?.url ?? (user_avatar ? getSafeThumbnailUrl('persona', user_avatar) : '');
             } else {
                 // Try to find character avatar by name
                 avatarUrl = this.getCharacterAvatar(member.name);
@@ -484,7 +471,7 @@ export class EncounterModal {
                         <h4>${member.name} ${member.isPlayer ? i18n.getTranslation('encounter.ui.playerSuffix') || '(You)' : ''}</h4>
                         <div class="rpg-encounter-hp-bar">
                             <div class="rpg-encounter-hp-fill rpg-encounter-hp-party" style="width: ${hpPercent}%"></div>
-                            <span class="rpg-encounter-hp-text">${member.hp}/${member.maxHp}${i18n.getTranslation('encounter.ui.hpSuffix') || ' HP'}</span>
+                            <span class="rpg-encounter-hp-text">${member.hp ?? '?'} / ${member.maxHp ?? '?'}${i18n.getTranslation('encounter.ui.hpSuffix') || ' HP'}</span>
                         </div>                        ${member.statuses && member.statuses.length > 0 ? `
                             <div class="rpg-encounter-statuses">
                                 ${member.statuses.map(status => `<span class="rpg-encounter-status" title="${status.name}">${status.emoji}</span>`).join('')}
@@ -585,7 +572,7 @@ export class EncounterModal {
                             <div class="rpg-target-option" data-target="${enemy.name}" data-target-type="enemy" data-target-index="${index}">
                                 <div class="rpg-target-icon">${enemy.sprite || '👹'}</div>
                                 <div class="rpg-target-name">${enemy.name}</div>
-                                <div class="rpg-target-hp">${enemy.hp}/${enemy.maxHp}${i18n.getTranslation('encounter.ui.hpSuffix') || ' HP'}</div>
+                                <div class="rpg-target-hp">${enemy.hp ?? '?'} / ${enemy.maxHp ?? '?'}${i18n.getTranslation('encounter.ui.hpSuffix') || ' HP'}</div>
                             </div>
                         `;
                     }
@@ -609,7 +596,7 @@ export class EncounterModal {
                             <div class="rpg-target-option rpg-target-ally" data-target="${member.name}" data-target-type="party" data-target-index="${index}">
                                 <div class="rpg-target-icon">${avatarIcon}</div>
                                 <div class="rpg-target-name">${member.name}${isPlayer}</div>
-                                <div class="rpg-target-hp">${member.hp}/${member.maxHp}${i18n.getTranslation('encounter.ui.hpSuffix') || ' HP'}</div>
+                                <div class="rpg-target-hp">${member.hp ?? '?'} / ${member.maxHp ?? '?'}${i18n.getTranslation('encounter.ui.hpSuffix') || ' HP'}</div>
                             </div>
                         `;
                     }
@@ -660,7 +647,7 @@ export class EncounterModal {
      */
     renderPlayerControls(party, playerActions = null) {
         const player = party.find(m => m.isPlayer);
-        if (!player || player.hp <= 0) {
+        if (!player || (player.hp !== null && player.hp <= 0)) {
             return '<div class="rpg-encounter-controls"><p class="rpg-encounter-defeated">' + (i18n.getTranslation('encounter.ui.youHaveBeenDefeated') || 'You have been defeated...') + '</p></div>';
         }
 
@@ -737,7 +724,7 @@ export class EncounterModal {
                 const value = actionBtn.dataset.value;
                 const attackType = actionBtn.dataset.attackType;
                 const context = getContext();
-                const userName = context.name1;
+                const userName = actionState().player?.name ?? context.name1;
 
                 let actionText = '';
 
@@ -798,116 +785,7 @@ export class EncounterModal {
      * @param {string} action - The action description
      */
     async processCombatAction(action) {
-        if (this.isProcessing) return;
-
-        this.isProcessing = true;
-
-        try {
-            // Disable all buttons
-            this.modal.querySelectorAll('.rpg-encounter-action-btn, #rpg-encounter-custom-submit').forEach(btn => {
-                btn.disabled = true;
-            });
-
-            // Add action to log
-            this.addToLog(`${i18n.getTranslation('encounter.ui.youPrefix') || 'You: '}${action}`, 'player-action');
-
-            // Build and send combat action prompt
-            const actionPrompt = await buildCombatActionPrompt(action, currentEncounter.combatStats);
-
-            // Store request for potential regeneration
-            this.lastRequest = { type: 'action', action, prompt: actionPrompt };
-
-            const response = await safeGenerateRaw({
-                prompt: actionPrompt,
-                quietToLoud: false
-            });
-
-            if (!response) {
-                this.showErrorWithRegenerate(i18n.getTranslation('encounter.ui.error.noResponse') || 'No response received from AI. The model may be unavailable.');
-                return;
-            }
-
-            // Parse response
-            const result = parseEncounterJSON(response);
-
-            if (!result || !result.combatStats) {
-                this.showErrorWithRegenerate(i18n.getTranslation('encounter.ui.error.invalidJsonFormat') || 'Invalid JSON format detected. The AI returned malformed data. Ensure the Max Response Length is set to at least 2048 tokens, otherwise the model might run out of tokens and produce unfinished structures.');
-                return;
-            }
-
-            // Update encounter state
-            updateCurrentEncounter({
-                combatStats: result.combatStats,
-                playerActions: result.playerActions
-            });
-
-            // Collect log entries in order: enemy actions, party actions, then narration
-            const logEntries = [];
-
-            // Add enemy actions first
-            if (result.enemyActions) {
-                result.enemyActions.forEach(enemyAction => {
-                    logEntries.push({ message: `${enemyAction.enemyName}: ${enemyAction.action}`, type: 'enemy-action' });
-                });
-            }
-
-            // Add party actions second
-            if (result.partyActions) {
-                result.partyActions.forEach(partyAction => {
-                    logEntries.push({ message: `${partyAction.memberName}: ${partyAction.action}`, type: 'party-action' });
-                });
-            }
-
-            // Add narrative last - split by newlines for line-by-line display
-            if (result.narrative) {
-                const narrativeLines = result.narrative.split('\n').filter(line => line.trim());
-                narrativeLines.forEach(line => {
-                    logEntries.push({ message: line, type: 'narrative' });
-                });
-            }
-
-            // Display log entries sequentially with animation
-            await this.addLogsSequentially(logEntries);
-
-            // Add to encounter log for summary - include all actions
-            let fullActionLog = action;
-            if (result.enemyActions && result.enemyActions.length > 0) {
-                result.enemyActions.forEach(enemyAction => {
-                    fullActionLog += `\n${enemyAction.enemyName}: ${enemyAction.action}`;
-                });
-            }
-            if (result.partyActions && result.partyActions.length > 0) {
-                result.partyActions.forEach(partyAction => {
-                    fullActionLog += `\n${partyAction.memberName}: ${partyAction.action}`;
-                });
-            }
-            addEncounterLogEntry(fullActionLog, result.narrative || 'Action resolved');
-
-            // Update UI
-            this.updateCombatUI(result.combatStats);
-
-            // Check if combat ended
-            if (result.combatEnd) {
-                await this.endCombat(result.result || 'unknown');
-                return;
-            }
-
-            // Re-enable buttons
-            this.modal.querySelectorAll('.rpg-encounter-action-btn, #rpg-encounter-custom-submit').forEach(btn => {
-                btn.disabled = false;
-            });
-
-        } catch (error) {
-            console.error('[RPG Companion] Error processing combat action:', error);
-            this.showErrorWithRegenerate(`${i18n.getTranslation('encounter.ui.error.errorProcessingAction') || 'Error processing action:'} ${error.message}`);
-
-            // Re-enable buttons
-            this.modal.querySelectorAll('.rpg-encounter-action-btn, #rpg-encounter-custom-submit').forEach(btn => {
-                btn.disabled = false;
-            });
-        } finally {
-            this.isProcessing = false;
-        }
+        return draftNativeAction(this,action);
     }
 
     /**
@@ -919,8 +797,8 @@ export class EncounterModal {
         combatStats.enemies.forEach((enemy, index) => {
             const card = this.modal.querySelector(`[data-enemy-index="${index}"]`);
             if (card) {
-                const hpPercent = (enemy.hp / enemy.maxHp) * 100;
-                const isDead = enemy.hp <= 0;
+                const hpPercent = enemy.maxHp ? (enemy.hp / enemy.maxHp) * 100 : 0;
+                const isDead = enemy.hp !== null && enemy.hp <= 0;
 
                 if (isDead) {
                     card.classList.add('rpg-encounter-dead');
@@ -930,7 +808,7 @@ export class EncounterModal {
                 const hpText = card.querySelector('.rpg-encounter-hp-text');
 
                 if (hpBar) hpBar.style.width = `${hpPercent}%`;
-                if (hpText) hpText.textContent = `${enemy.hp}/${enemy.maxHp} HP`;
+                if (hpText) hpText.textContent = `${enemy.hp ?? '?'} / ${enemy.maxHp ?? '?'} HP`;
             }
         });
 
@@ -938,8 +816,8 @@ export class EncounterModal {
         combatStats.party.forEach((member, index) => {
             const card = this.modal.querySelector(`[data-party-index="${index}"]`);
             if (card) {
-                const hpPercent = (member.hp / member.maxHp) * 100;
-                const isDead = member.hp <= 0;
+                const hpPercent = member.maxHp ? (member.hp / member.maxHp) * 100 : 0;
+                const isDead = member.hp !== null && member.hp <= 0;
 
                 if (isDead) {
                     card.classList.add('rpg-encounter-dead');
@@ -949,7 +827,7 @@ export class EncounterModal {
                 const hpText = card.querySelector('.rpg-encounter-hp-text');
 
                 if (hpBar) hpBar.style.width = `${hpPercent}%`;
-                if (hpText) hpText.textContent = `${member.hp}/${member.maxHp} HP`;
+                if (hpText) hpText.textContent = `${member.hp ?? '?'} / ${member.maxHp ?? '?'} HP`;
             }
         });
 
@@ -1058,13 +936,7 @@ export class EncounterModal {
      * Concludes the encounter early (user-initiated)
      */
     async concludeEncounter() {
-        if (!currentEncounter.active) {
-            console.warn('[RPG Companion] No active encounter to conclude');
-            return;
-        }
-
-        // End combat with "interrupted" result
-        await this.endCombat('interrupted');
+        return draftNativeAction(this,'我请求和平结束或撤退。请先说明是否需要检定，完成必要结算后再结束当前遭遇。');
     }
 
     /**
@@ -1415,10 +1287,7 @@ export class EncounterModal {
      * Closes the modal and resets encounter state
      */
     close() {
-        if (this.modal) {
-            this.modal.classList.remove('is-open');
-            resetEncounter();
-        }
+        closeNativeEncounter(this);
     }
 }
 
