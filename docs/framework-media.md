@@ -2,6 +2,8 @@
 
 Version 3.7.11 adds visual declarations without fixed game statistics or categories. It includes the bounded background correction introduced in 3.7.10.
 
+Version 3.7.12 pins the effective framework mode when saving chat preferences and when starting a normal generation. Previously, a preference-only metadata object could cause the first valid reply to be treated as a legacy chat and skipped. Preference controls now share a save lock and show a saving status to prevent overlapping changes. Existing legacy chats keep their mode.
+
 ## Data contract
 
 Entities, groups, fields and collection items may contain a `visual` object:

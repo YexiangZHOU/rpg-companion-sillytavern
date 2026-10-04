@@ -100,6 +100,29 @@ test('model-defined scene reads no fixed numeric fields and never includes priva
 test('failed initializer never switches a fresh game silently to legacy',async()=>{
     const h=harness();h.ctx.chat.push(reply('开场'));h.controller.begin('normal');const m=reply(text({...init,ops:[]}));h.ctx.chat.push(m);await h.controller.receive(m);assert.equal(h.controller.active(),true);
 });
+
+for (const preference of ['repair','media','existing']) test(`first reply stays universal after ${preference} preferences`,async()=>{
+    const h=harness();h.ctx.chat.push(reply('Greeting'));
+    if(preference==='repair')await h.controller.setRepairLimit(0);
+    if(preference==='media')await h.controller.setMediaMode('manual');
+    if(preference==='existing')h.ctx.chatMetadata.rpg_framework_v1={repairAttempts:0,mediaMode:'manual'};
+    h.ctx.chat.push({mes:'Start',is_user:true});h.controller.begin('normal');
+    const m=reply(text(init));h.ctx.chat.push(m);
+    assert.equal(h.controller.active(),true);
+    assert.equal(await h.controller.receive(m),true);
+    assert.equal(h.controller.state().revision,1);assert.equal(m.mes,'一段叙事');
+    assert.equal(h.ctx.chatMetadata.rpg_framework_v1.mode,'universal');
+    if(preference!=='media')assert.equal(h.ctx.chatMetadata.rpg_framework_v1.repairAttempts,0);
+    if(preference!=='repair')assert.equal(h.ctx.chatMetadata.rpg_framework_v1.mediaMode,'manual');
+    assert.equal(h.controller.restore().revision,1);
+});
+
+test('preference saves preserve legacy mode and do not opt old chats into universal',async()=>{
+    const h=harness();h.ctx.chat.push(reply('Old greeting'),reply('Old response'));
+    await h.controller.setRepairLimit(1);await h.controller.setMediaMode('manual');
+    assert.equal(h.ctx.chatMetadata.rpg_framework_v1.mode,'legacy');
+    assert.equal(h.controller.begin('normal'),'');
+});
 test('only accepted portrait requests hide; failed, edited, other swipe and examples remain visible',()=>{
     const raw='叙事\n<rpg-portrait>{"entityId":"me"}</rpg-portrait>',m=reply(raw);
     assert.equal(stripAcceptedPortraits(raw,m),raw);m.extra={rpg_framework_portraits:{0:{reply:raw,images:{me:{url:'/user/images/demo.png'}}}}};assert.equal(stripAcceptedPortraits(raw,m),'叙事');

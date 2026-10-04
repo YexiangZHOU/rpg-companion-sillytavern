@@ -49,7 +49,7 @@ export class FrameworkChat {
         const ctx = this.getContext(), messages = ctx.chat ?? [];
         // Pin a fresh game's mode before the first reply. An invalid initializer
         // must not make it look like a legacy chat simply by adding a message.
-        ctx.chatMetadata[CHAT_FRAMEWORK_KEY] ??= { mode: 'universal' };
+        ctx.chatMetadata[CHAT_FRAMEWORK_KEY] = { ...(ctx.chatMetadata[CHAT_FRAMEWORK_KEY] ?? {}), mode: 'universal' };
         const replace = ['swipe','regenerate'].includes(type) && validReply(messages.at(-1));
         const prior = replace ? messages.slice(0, -1) : messages;
         const state = readFrameworkBranch(prior);
@@ -107,14 +107,14 @@ export class FrameworkChat {
     async setRepairLimit(value) {
         if (![0,1,2].includes(value) || this.saving) throw Error('当前无法更改纠错设置');
         this.cancelRepair(); const ctx = this.getContext(), prior = cloneFramework(ctx.chatMetadata[CHAT_FRAMEWORK_KEY] ?? {});
-        ctx.chatMetadata[CHAT_FRAMEWORK_KEY] = { ...prior, repairAttempts: value };
+        ctx.chatMetadata[CHAT_FRAMEWORK_KEY] = { ...prior, mode: frameworkMode(ctx), repairAttempts: value };
         this.saving = true;
         try { await this.save(); } catch (error) { ctx.chatMetadata[CHAT_FRAMEWORK_KEY] = prior; throw error; } finally { this.saving = false; }
     }
     async setMediaMode(value) {
         if (!['manual','proposal','auto','off'].includes(value) || this.saving) throw Error('当前无法更改配图设置');
         const ctx=this.getContext(),prior=ctx.chatMetadata[CHAT_FRAMEWORK_KEY];
-        ctx.chatMetadata[CHAT_FRAMEWORK_KEY]={...(prior??{}),mediaMode:value};this.saving=true;
+        ctx.chatMetadata[CHAT_FRAMEWORK_KEY]={...(prior??{}),mode:frameworkMode(ctx),mediaMode:value};this.saving=true;
         try{await this.save();}catch(error){if(prior===undefined)delete ctx.chatMetadata[CHAT_FRAMEWORK_KEY];else ctx.chatMetadata[CHAT_FRAMEWORK_KEY]=prior;throw error;}finally{this.saving=false;}
         this.render(this.state());
     }

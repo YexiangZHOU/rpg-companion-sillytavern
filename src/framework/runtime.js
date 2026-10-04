@@ -191,17 +191,33 @@ function mount() {
     let controls = document.getElementById('rpg-framework-controls');
     if (!controls || !more.contains(controls)) {
         controls?.remove(); controls = node('section','rpg-framework-controls'); controls.id = 'rpg-framework-controls';
+        // These preferences share one metadata save; prevent overlapping changes.
+        const changePreference = async (operation, failure) => {
+            const metadata = getContext().chatMetadata;
+            const selects = [...controls.querySelectorAll('select')];
+            for (const control of selects) control.disabled = true;
+            const status = controls.querySelector('#rpg-framework-feedback');
+            if (status) status.textContent = text('正在保存聊天设置…','Saving chat settings…');
+            try {
+                await operation();
+                if (getContext().chatMetadata === metadata) renderFramework(frameworkChat.state());
+            } catch {
+                if (getContext().chatMetadata === metadata) report(failure);
+            } finally {
+                for (const control of selects) control.disabled = false;
+            }
+        };
         const label = node('label','',text('本聊天数据框架','Chat data framework')), select = node('select',''); select.id = 'rpg-framework-mode';
         for (const [value,name] of [['universal',text('通用：模型定义分类','Universal: model-defined')],['legacy',text('兼容：原版记录','Legacy trackers')]]) { const o = node('option','',name); o.value = value; select.append(o); }
-        select.addEventListener('change', async () => { select.disabled = true; try { incrementSeparateGenerationId(); await frameworkChat.setMode(select.value); await eventSource.emit(event_types.CHAT_LOADED); } catch { report(text('模式保存失败','Could not save mode')); } finally { select.disabled = false; } });
+        select.addEventListener('change', () => changePreference(async () => { incrementSeparateGenerationId(); await frameworkChat.setMode(select.value); await eventSource.emit(event_types.CHAT_LOADED); }, text('模式保存失败','Could not save mode')));
         label.append(select); controls.append(label);
         const repairLabel = node('label','',text('后台自动纠错','Background correction')), repairSelect = node('select',''); repairSelect.id = 'rpg-framework-repair-limit';
         for (const value of [0,1,2]) { const o = node('option','',value ? text(`最多 ${value} 次额外文字请求`,`Up to ${value} extra text requests`) : text('关闭','Off')); o.value = String(value); repairSelect.append(o); }
-        repairSelect.addEventListener('change', async () => { repairSelect.disabled = true; try { await frameworkChat.setRepairLimit(Number(repairSelect.value)); } catch { report(text('纠错设置保存失败','Could not save correction settings')); } finally { repairSelect.value = String(frameworkChat.repairLimit()); repairSelect.disabled = false; } });
+        repairSelect.addEventListener('change', () => changePreference(async () => { try { await frameworkChat.setRepairLimit(Number(repairSelect.value)); } finally { repairSelect.value = String(frameworkChat.repairLimit()); } }, text('纠错设置保存失败','Could not save correction settings')));
         repairLabel.append(repairSelect); controls.append(repairLabel);
         const mediaLabel=node('label','',text('本聊天头像与图标','Chat portraits and icons')),mediaSelect=node('select','');mediaSelect.id='rpg-framework-media-mode';
         for(const [value,cn,en] of [['manual','手动生成','Manual'],['proposal','列出提议，点击生成','Propose; click to generate'],['auto','自动（每轮最多两张）','Automatic (up to two per turn)'],['off','关闭生成','Disabled']]){const o=node('option','',text(cn,en));o.value=value;mediaSelect.append(o);}
-        mediaSelect.addEventListener('change',async()=>{mediaSelect.disabled=true;try{frameworkMedia.cancel();await frameworkChat.setMediaMode(mediaSelect.value);}catch{report(text('配图设置保存失败','Could not save media settings'));}finally{mediaSelect.value=portraitMode();mediaSelect.disabled=false;}});
+        mediaSelect.addEventListener('change', () => changePreference(async () => { try { frameworkMedia.cancel(); await frameworkChat.setMediaMode(mediaSelect.value); } finally { mediaSelect.value = portraitMode(); } }, text('配图设置保存失败','Could not save media settings')));
         mediaLabel.append(mediaSelect);controls.append(mediaLabel,node('small','',text('与场景图模式分开；切换模式不会立即绘图。','Separate from scene images; changing mode does not generate images.')));
 
         const feedback = node('small','',text('分类与初值由模型建立；旧记录保留。','The model creates categories and initial values. Legacy records are preserved.')); feedback.id = 'rpg-framework-feedback'; feedback.setAttribute('role','status'); controls.append(feedback); more.prepend(controls);
