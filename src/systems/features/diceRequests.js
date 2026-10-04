@@ -11,6 +11,7 @@ import { evaluateSuppression } from '../generation/suppression.js';
 import { currentDiceData,updateDiceDisplay } from './dice.js';
 import { validateRoll,formula,parseRollBlocks,stripRollBlocks,shouldAuto,resolveRecord,resultText } from './diceEngine.mjs';
 import { stripAcceptedActions } from './actionStore.js';
+import { renderGameMessage } from '../../framework/messageView.js';
 import { actionState } from './actionStore.js';
 
 let generation=null, initialized=false, sendBusy=false;
@@ -132,7 +133,7 @@ export function renderDiceRequests() {
             const body=target.querySelector('.mes_text');
             const previous=body && displayCache.get(body);
             if(body && display!==raw && (previous?.raw!==raw || previous?.html!==body.innerHTML)) {
-                body.innerHTML=messageFormatting(display,message.name,message.is_system,message.is_user,index,{},false);
+                renderGameMessage(body,display,message,index);
                 displayCache.set(body,{raw,html:body.innerHTML});
             }
         }

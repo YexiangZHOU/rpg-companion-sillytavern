@@ -363,10 +363,14 @@ export function decorateBalancedScene() {
 /** Detach the original dice node before the info renderer replaces its children. */
 export function preserveBalancedDice() {
     if(!root?.isConnected)return;
+    const frameworkScroll = root.classList.contains('rpg-framework-active') && document.getElementById('rpg-framework-scene-scroll');
+    const dice = document.getElementById('rpg-dice-display');
+    if (frameworkScroll && dice) { if (dice.parentElement !== frameworkScroll) frameworkScroll.prepend(dice); return; }
     const entry=originals.find(([el])=>el.id==='rpg-dice-display');
     if(entry?.[1].isConnected)entry[1].after(entry[0]);
 }
 function positionBalancedDice() {
+    if (root?.classList.contains('rpg-framework-active')) { preserveBalancedDice(); return; }
     const info=document.getElementById('rpg-info-box'),fold=info?.querySelector('.rpg-balanced-event-fold'),dice=document.getElementById('rpg-dice-display');
     if(fold && dice && extensionSettings.showInfoBox && info.style.display!=='none') {
         if(fold.previousElementSibling!==dice)fold.before(dice);

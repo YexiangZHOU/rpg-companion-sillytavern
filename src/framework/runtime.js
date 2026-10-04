@@ -4,7 +4,7 @@ import { eventSource, event_types, setExtensionPrompt, extension_prompt_types, e
 import { extensionSettings, incrementSeparateGenerationId } from '../core/state.js';
 import { i18n } from '../core/i18n.js';
 import { FrameworkChat, frameworkMode } from './chat.mjs';
-import { FrameworkPanel } from './panel.mjs';
+import { FrameworkPanel, FrameworkRoster } from './panel.mjs';
 import { evaluateSuppression } from '../systems/generation/suppression.js';
 import { processActionReply, renderActionMessages } from '../systems/features/actionBridge.js';
 import { actionPreference } from '../systems/features/actionStore.js';
@@ -14,6 +14,7 @@ import { saveFrameworkVerified } from './storage.mjs';
 import { entityAppearance } from './visual.mjs';
 import { SlashCommandParser } from '../../../../../slash-commands/SlashCommandParser.js';
 import { encounterModal } from '../systems/ui/encounterUI.js';
+import { preserveBalancedDice } from '../systems/ui/balancedLayout.js';
 import { protocolVisibleText } from '../systems/features/diceEngine.mjs';
 import { withAvatarJob } from '../systems/features/avatarQueue.mjs';
 
@@ -42,35 +43,45 @@ function portrait(entity) {
     return character?.avatar ? ctx.getThumbnailUrl?.('avatar', character.avatar) : null;
 }
 function panel(root) { return new FrameworkPanel(root, { language: zh() ? 'zh' : 'en', getPortrait: portrait, onOperation: op => frameworkChat.manual([op]) }); }
+function roster(root, side) { return new FrameworkRoster(root, {
+    language: zh() ? 'zh' : 'en', side, getPortrait: portrait,
+    onOperation: op => frameworkChat.manual([op]), onPortrait: id => generateFrameworkPortrait(id),
+    onPortraitLock: id => togglePortraitLock(id), isPortraitLocked: id => !!currentPortraits()[id]?.locked,
+    hasGeneratedPortrait: id => !!currentPortraits()[id]?.url,
+}); }
 function mount() {
     const host = document.getElementById('rpg-companion-panel');
     if (!host) return;
     const right = host.querySelector('.rpg-balanced-scroll') ?? host.querySelector('.rpg-content-box');
     const left = document.getElementById('rpg-balanced-scene') ?? host.querySelector('.rpg-game-container');
     if (!right || !left) return;
+    let more = right.querySelector('.rpg-balanced-more');
+    if (!more) { more = node('details', 'rpg-balanced-more'); more.append(node('summary', '', text('更多','More'))); right.append(more); }
     let controls = document.getElementById('rpg-framework-controls');
-    if (!controls || !right.contains(controls)) {
+    if (!controls || !more.contains(controls)) {
         controls?.remove(); controls = node('section','rpg-framework-controls'); controls.id = 'rpg-framework-controls';
         const label = node('label','',text('本聊天数据框架','Chat data framework')), select = node('select',''); select.id = 'rpg-framework-mode';
         for (const [value,name] of [['universal',text('通用：模型定义分类','Universal: model-defined')],['legacy',text('兼容：原版记录','Legacy trackers')]]) { const o = node('option','',name); o.value = value; select.append(o); }
         select.addEventListener('change', async () => { select.disabled = true; try { incrementSeparateGenerationId(); await frameworkChat.setMode(select.value); await eventSource.emit(event_types.CHAT_LOADED); } catch { report(text('模式保存失败','Could not save mode')); } finally { select.disabled = false; } });
         label.append(select); controls.append(label);
-        const feedback = node('small','',text('分类与初值由模型建立；旧记录保留。','The model creates categories and initial values. Legacy records are preserved.')); feedback.id = 'rpg-framework-feedback'; controls.append(feedback); right.prepend(controls);
-        const image = node('button','uf-subtle',text('为当前对象生成头像','Generate selected entity portrait')); image.type='button'; image.id='rpg-framework-portrait';
-        image.addEventListener('click',()=>void generateFrameworkPortrait(playerPanel?.entityId).catch(e=>report(e.message))); controls.append(image);
-        const lock=node('button','uf-subtle',text('切换当前头像锁','Toggle selected portrait lock'));lock.type='button';lock.id='rpg-framework-portrait-lock';lock.addEventListener('click',()=>void togglePortraitLock().catch(e=>report(e.message)));controls.append(lock);
+        const feedback = node('small','',text('分类与初值由模型建立；旧记录保留。','The model creates categories and initial values. Legacy records are preserved.')); feedback.id = 'rpg-framework-feedback'; feedback.setAttribute('role','status'); controls.append(feedback); more.prepend(controls);
     }
-    if (!playerPanel?.root.isConnected || playerPanel.root.parentElement !== right) { playerPanel?.root.remove(); const root = node('section','rpg-framework-player'); root.id = 'rpg-framework-player'; controls.after(root); playerPanel = panel(root); }
-    if (!scenePanel?.root.isConnected || scenePanel.root.parentElement !== left) { scenePanel?.root.remove(); const root = node('section','rpg-framework-scene'); root.id = 'rpg-framework-scene'; left.append(root); scenePanel = panel(root); }
-    if (!document.getElementById('rpg-framework-scene-images')) { const images=node('section',''); images.id='rpg-framework-scene-images'; left.append(images); }
+    if (!playerPanel?.root.isConnected || playerPanel.root.parentElement !== right) { playerPanel?.root.remove(); const root = node('section','rpg-framework-player'); root.id = 'rpg-framework-player'; more.before(root); playerPanel = roster(root,'right'); }
+    let sceneScroll = document.getElementById('rpg-framework-scene-scroll');
+    if (!sceneScroll || sceneScroll.parentElement !== left) { sceneScroll?.remove(); sceneScroll = node('div','rpg-framework-scroll'); sceneScroll.id = 'rpg-framework-scene-scroll'; left.append(sceneScroll); }
+    if (!scenePanel?.root.isConnected || scenePanel.root.parentElement !== sceneScroll) { scenePanel?.root.remove(); const root = node('section','rpg-framework-scene'); root.id = 'rpg-framework-scene'; sceneScroll.append(root); scenePanel = roster(root,'left'); }
+    if (!document.getElementById('rpg-framework-scene-images')) { const images=node('section',''); images.id='rpg-framework-scene-images'; sceneScroll.prepend(images); }
     controls.querySelector('select').value = frameworkMode(getContext());
 }
 function renderFramework(state, info = {}) {
     mount(); const active = frameworkChat.active();
     document.getElementById('rpg-companion-panel')?.classList.toggle('rpg-framework-active', active);
+    preserveBalancedDice();
     if (!active || !playerPanel || !state) return;
     playerPanel.render(view(state, e => !leftEntity(e) && !encounterEntity(e)));
-    scenePanel.render(view(state, leftEntity));
+    const sceneState = view(state, leftEntity);
+    sceneState.entities = [...sceneState.entities].sort((a,b) => Number(sceneEntity(b)) - Number(sceneEntity(a)));
+    scenePanel.render(sceneState);
     renderSceneImage();
     renderActionMessages();
     if (info.message) {
@@ -99,6 +110,7 @@ async function receive(id) {
     if (!frameworkChat.active() || is_send_press) return;
     const message=Number.isInteger(id) ? messages[id] : messages.at(-1);
     await frameworkChat.receive(message);
+    renderActionMessages();
     if (frameworkChat.active() && frameworkChat.generation?.handled.has(message)) await visualRequests(message);
 }
 function restore() { clearTimeout(timer); frameworkChat.restore(); }
@@ -117,7 +129,7 @@ export function initFrameworkRuntime() {
         if(is_send_press && ['MESSAGE_DELETED','MESSAGE_SWIPE_DELETED','MESSAGE_UPDATED'].includes(key) && frameworkChat.generation?.metadata===getContext().chatMetadata) return;
         restore();
     });
-    i18n.addEventListener('languageChanged', () => { playerPanel = null; scenePanel = null; restore(); });
+    i18n.addEventListener('languageChanged', () => { playerPanel?.root.remove(); scenePanel?.root.remove(); document.getElementById('rpg-framework-controls')?.remove(); playerPanel = null; scenePanel = null; restore(); });
     observer = new MutationObserver(() => { if (document.getElementById('rpg-companion-panel') && (!playerPanel?.root.isConnected || !document.getElementById('rpg-framework-controls'))) { cancelAnimationFrame(frame); frame = requestAnimationFrame(() => renderFramework(frameworkChat.state())); } });
     observer.observe(document.body,{childList:true,subtree:true}); restore();
 }
@@ -160,9 +172,9 @@ export async function generateFrameworkPortrait(entityId, expectedMessage) {
         if(getContext().chatMetadata===ctx.chatMetadata)renderFramework(frameworkChat.state());
     } finally {portraitBusy.delete(ctx.chatMetadata);}
 }
-async function togglePortraitLock(){
+async function togglePortraitLock(entityId){
     if(!frameworkChat.active()||frameworkChat.saving)throw Error(text('当前无法编辑头像锁','Cannot edit portrait lock now'));
-    const ctx=getContext(),id=playerPanel?.entityId,images=currentPortraits();if(!images[id]?.url)throw Error(text('当前对象还没有生成头像','Generate a portrait for this entity first'));
+    const ctx=getContext(),id=entityId??playerPanel?.entityId,images=currentPortraits();if(!images[id]?.url)throw Error(text('当前对象还没有生成头像','Generate a portrait for this entity first'));
     const anchor=[...ctx.chat].reverse().find(m=>!m.is_user&&!m.is_system),swipe=anchor.swipe_id??0;
     const old=anchor.extra?.rpg_framework_portraits?structuredClone(anchor.extra.rpg_framework_portraits):undefined,oldInfo=anchor.swipe_info?.[swipe]?.extra?.rpg_framework_portraits?structuredClone(anchor.swipe_info[swipe].extra.rpg_framework_portraits):undefined;
     anchor.extra??={};anchor.extra.rpg_framework_portraits??={};anchor.extra.rpg_framework_portraits[swipe]={reply:anchor.mes,images:{...images,[id]:{...images[id],locked:!images[id].locked}}};

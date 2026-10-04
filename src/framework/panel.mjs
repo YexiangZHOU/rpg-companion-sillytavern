@@ -20,8 +20,8 @@ const button = (label, callback, className = 'uf-button') => {
 };
 
 export class FrameworkPanel {
-    constructor(root, { onOperation, language = 'zh', getPortrait } = {}) {
-        this.root = root; this.onOperation = onOperation; this.getPortrait = getPortrait; this.strings = panelStrings[language] ?? panelStrings.zh;
+    constructor(root, { onOperation, language = 'zh', getPortrait, presentation = 'editor', onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait } = {}) {
+        Object.assign(this, { root, onOperation, getPortrait, presentation, onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait }); this.strings = panelStrings[language] ?? panelStrings.zh;
         this.entityId = null; this.selected = new Map(); this.opened = new Map(); this.scrollPositions = new Map(); this.renderedGroup = null; this.serial = 0;
         root.classList.add('uf-panel');
     }
@@ -41,6 +41,7 @@ export class FrameworkPanel {
         return element;
     }
     render(state) {
+        if (this.presentation === 'game') return this.renderGame(state);
         const oldScroll = this.root.querySelector('.uf-content')?.scrollTop ?? 0;
         if (this.renderedGroup) this.scrollPositions.set(this.renderedGroup, oldScroll);
         const oldNavScroll = this.root.querySelector('.uf-nav')?.scrollTop ?? 0;
@@ -112,6 +113,70 @@ export class FrameworkPanel {
         nav.scrollTop = oldNavScroll;
         content.scrollTop = this.scrollPositions.get(groupId) ?? 0;
         this.renderedGroup = groupId;
+        if (focusKey) [...this.root.querySelectorAll('[data-focus]')].find(part => part.dataset.focus === focusKey)?.focus({ preventScroll: true });
+    }
+    renderGame(state) {
+        const t = this.strings, zh = t === panelStrings.zh;
+        const focusKey = this.root.contains(document.activeElement) ? document.activeElement.dataset.focus : null;
+        this.root.querySelectorAll('details[data-detail]').forEach(part => this.opened.set(part.dataset.detail, part.open));
+        this.state = state;
+        this.root.replaceChildren(); this.root.classList.add('uf-game'); this.root.classList.toggle('is-editing', !!this.editing);
+        const entity = state.entities.find(e => !e.archived);
+        this.entityId = entity?.id ?? null;
+        if (!entity) return;
+        const header = node('header', 'uf-header');
+        const identity = node('div', 'uf-identity');
+        if (entity.kind !== 'scene' && entity.kind !== 'encounter') {
+            const portrait = node('div', 'uf-avatar', entity.label.slice(0, 1));
+            const url = this.getPortrait?.(entity);
+            if (url) { const img = node('img', 'uf-avatar-image'); img.src = url; img.alt = entity.label; img.addEventListener('error', () => img.remove(), { once: true }); portrait.append(img); }
+            identity.append(portrait);
+        }
+        const names = node('div', 'uf-names'); names.append(node('h2', '', entity.label));
+        const actions = node('div', 'uf-entity-actions');
+        const editing = button(zh ? '编辑' : 'Edit', () => { this.editing = !this.editing; this.render(this.state); }, 'uf-subtle');
+        editing.dataset.focus = `edit_${entity.id}`; editing.setAttribute('aria-pressed', String(!!this.editing)); actions.append(editing);
+        if (this.onPortrait && entity.kind !== 'scene' && entity.kind !== 'encounter') {
+            actions.append(button(zh ? '生成头像' : 'Portrait', () => this.onPortrait(entity.id), 'uf-subtle'));
+            if (this.hasGeneratedPortrait?.(entity.id)) {
+                const locked = !!this.isPortraitLocked?.(entity.id);
+                const lock = button(zh ? (locked ? '头像已锁定' : '锁定头像') : (locked ? 'Portrait locked' : 'Lock portrait'), () => this.onPortraitLock?.(entity.id), 'uf-subtle');
+                lock.setAttribute('aria-pressed', String(locked)); actions.append(lock);
+            }
+        }
+        names.append(actions); identity.append(names); header.append(identity);
+        // Public description stays above appearance; it is not an inferred thought.
+        if (entity.description) header.append(node('p', 'uf-description uf-entity-description', entity.description));
+        this.root.append(header);
+        const groups = activeFrameworkGroups(state, entity.id);
+        const appearance = groups.flatMap(g => activeFrameworkFields(state, g.id)).filter(f => f.type === 'text' && /^(?:外观|相貌|外貌|appearance)$/i.test(f.label.trim()));
+        if (appearance.length) { const section = node('div', 'uf-appearance'); for (const field of appearance) section.append(this.fieldView(field)); this.root.append(section); }
+        const summaryFields = entity.kind === 'npc' ? [] : groups.flatMap(g => activeFrameworkFields(state, g.id)).filter(f => f.summary && !appearance.includes(f)).slice(0,6);
+        if (summaryFields.length) { const summaries = node('div','uf-game-summaries'); summaryFields.forEach(f => summaries.append(this.fieldView(f, true))); this.root.append(summaries); }
+        const content = node('section', 'uf-content');
+        let parent = content;
+        if (entity.kind === 'npc') {
+            const status = this.details(`status_${entity.id}`, zh ? '状态' : 'Status'); status.dataset.detail = `status_${entity.id}`;
+            if (this.editing) status.open = true;
+            content.append(status); parent = status;
+        }
+        for (const [index, group] of groups.entries()) {
+            const fields = activeFrameworkFields(state, group.id).filter(f => !appearance.includes(f) && (this.editing || !summaryFields.includes(f)));
+            if (!fields.length && !this.editing) continue;
+            const section = this.details(`game_group_${group.id}`, group.label); section.classList.add('uf-group'); section.dataset.detail = `game_group_${group.id}`;
+            section.open = this.opened.get(section.dataset.detail) ?? (index === 0 || entity.kind === 'npc' || entity.kind === 'scene');
+            if (group.description) section.append(node('p', 'uf-description', group.description));
+            const tools = node('div', 'uf-group-tools'); tools.append(button(t.rename, () => this.renameGroup(group), 'uf-subtle'));
+            for (const mode of ['structure', 'value']) {
+                const locked = isFrameworkLocked(state, 'group', group.id, mode);
+                const control = button(`${locked ? '● ' : '○ '}${mode === 'structure' ? t.struct : t.lock}`, () => this.onOperation?.({ op: 'setLock', target: mode, id: group.id, locked: !state.locks[mode].includes(group.id) }), 'uf-subtle');
+                control.title = t.lockedHint; control.dataset.focus = `lock_${mode}_${group.id}`; control.setAttribute('aria-pressed', String(locked)); tools.append(control);
+            }
+            section.append(tools);
+            const grid = node('div', `uf-fields uf-layout-${group.layout}`);
+            fields.forEach(field => grid.append(this.fieldView(field))); section.append(grid); parent.append(section);
+        }
+        this.root.append(content);
         if (focusKey) [...this.root.querySelectorAll('[data-focus]')].find(part => part.dataset.focus === focusKey)?.focus({ preventScroll: true });
     }
     fieldView(field, compact = false) {
@@ -226,5 +291,34 @@ export class FrameworkPanel {
             const summaryHolder = node('label', 'uf-unknown-control'), summary = node('input'); summary.type = 'checkbox'; summary.checked = field.summary; summaryHolder.append(summary, document.createTextNode(t.summary)); form.append(summaryHolder);
             return () => ({ label: readLabel(), unit: unit.value, summary: summary.checked });
         }, patch => this.onOperation?.({ op: 'updateDefinition', target: 'field', id: field.id, patch }));
+    }
+}
+
+/** One content-sized card per entity, retaining editor state without a global selector. */
+export class FrameworkRoster {
+    constructor(root, options = {}) { this.root = root; this.options = options; this.panels = new Map(); this.folds = new Map(); this.entityId = null; }
+    render(state) {
+        this.root.querySelectorAll('details[data-entity]').forEach(e => this.folds.set(e.dataset.entity, e.open));
+        this.root.replaceChildren();
+        if (!state.initialized) {
+            const t = panelStrings[this.options.language] ?? panelStrings.zh;
+            const empty = node('div', 'uf-empty'); empty.append(node('p', '', t.emptyHint)); this.root.append(empty); return;
+        }
+        const entities = state.entities.filter(e => !e.archived);
+        this.entityId = entities.find(e => e.kind === 'player')?.id ?? entities[0]?.id ?? null;
+        const active = new Set();
+        let npcHeading = false;
+        for (const entity of entities) {
+            if (this.options.side === 'left' && entity.kind === 'npc' && !npcHeading) { this.root.append(node('h3','uf-roster-heading',this.options.language === 'en' ? 'Other characters' : '其他角色')); npcHeading = true; }
+            active.add(entity.id);
+            let panel = this.panels.get(entity.id);
+            if (!panel) { panel = new FrameworkPanel(node('section', 'uf-entity-card'), { ...this.options, presentation: 'game' }); this.panels.set(entity.id, panel); }
+            panel.render({ ...state, entities: [entity] });
+            if (!['player', 'scene', 'npc'].includes(entity.kind) && !(entity.id === this.entityId && !entities.some(e => e.kind === 'player'))) {
+                const fold = node('details', 'uf-object-fold'); fold.dataset.entity = entity.id; fold.open = this.folds.get(entity.id) ?? false;
+                fold.append(node('summary', '', entity.label), panel.root); this.root.append(fold);
+            } else this.root.append(panel.root);
+        }
+        for (const id of this.panels.keys()) if (!active.has(id)) this.panels.delete(id);
     }
 }

@@ -1,5 +1,6 @@
 import { encounterModal } from '../ui/encounterUI.js';
 import { isUniversalFramework } from '../../framework/mode.js';
+import { hasFrameworkMessageData, renderGameMessage } from '../../framework/messageView.js';
 import { setNativeStartHandler,refreshNativeEncounter,hideNativeEncounter } from './encounterAdapter.js';
 import { acceptSceneRequest,renderSceneImage,restoreSceneBranch,sceneImageMode } from './sceneImage.js';
 /** Original encounter UI backed by main-chat dice, snapshots and resources. */
@@ -44,12 +45,11 @@ export function renderActionMessages() {
         const acceptedRoll=records().some(r=>r.channel==='block'&&r.owner.id===(message.extra?.rpg_dice_owner??message.swipe_info?.[message.swipe_id??0]?.extra?.rpg_dice_owner)&&r.owner.swipe===(message.swipe_id??0)&&r.owner.revision===replyRevision(message.mes));
         const actionDisplay=stripAcceptedActions(raw,message);
         const display=acceptedRoll?stripRollBlocks(actionDisplay):actionDisplay;
-        if(display===raw)continue;
+        if(display===raw && !hasFrameworkMessageData(display))continue;
         const body=document.querySelector(`.mes[mesid="${index}"] .mes_text`);if(!body)continue;
         const old=displays.get(body);
-        if(old?.raw===raw&&old?.display===display&&old?.html===body.innerHTML)continue;
-        const formatted=messageFormatting(display,message.name,message.is_system,message.is_user,index,{},false);
-        if(body.innerHTML!==formatted)body.innerHTML=formatted;
+        if(!hasFrameworkMessageData(display)&&old?.raw===raw&&old?.display===display&&old?.html===body.innerHTML)continue;
+        renderGameMessage(body,display,message,index);
         displays.set(body,{raw,display,html:body.innerHTML});
     }
 }

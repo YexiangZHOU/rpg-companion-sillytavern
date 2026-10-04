@@ -11,6 +11,7 @@ export function buildFrameworkInstructions(state = emptyFramework()) {
         '正文侧重行动、对话、氛围和有意义的变化，不每轮重抄面板清单。已经确认的资源变化仍用一句简短结算说明。没有可靠记录的重要信息仍须交代。玩家要求全表时正常提供。',
         '本扩展的数据协议替代角色卡中的旧tracker/固定HUD清单格式；角色背景、人物性格与游戏规则继续遵守。显示名与文本值使用当前玩家对话语言，内部稳定编号使用允许的字符。',
         '正常叙事后可以输出且只输出一个 <rpg-framework>JSON事务</rpg-framework>，不要放进代码块、引用或示例。事务本身不等于保存成功，以下状态才是当前有效记录。',
+        '数据块必须是严格JSON：所有键与字符串使用双引号；不得有注释、尾逗号、未加引号的键、多余右括号或省略号。先完成JSON对象再紧接结束标签。只提交必要操作，不附加重复状态或调试字段；格式不合法时整个事务都会拒绝，叙事中声称已记录不能代替提交。',
         '事务格式：{"protocol":1,"id":"唯一事务编号","baseRevision":当前revision,"ops":[操作]}。编号以字母开头、最长64字，仅字母数字短横线下划线。所有对象/组别/字段编号全局唯一，改名继续用原编号。',
         '尚未初始化时唯一操作：{"op":"init","title":"本游戏名称","entities":[{"id":"对象编号","label":"名称","kind":"自由描述对象类别"}],"groups":[{"id":"组别编号","entityId":"所属对象编号","label":"组名","layout":"grid或list或details","order":0}],"fields":[字段定义],"values":{"字段编号":初值}}。组别、字段可以为空，未出现的值为未知。',
         `字段定义：id/groupId/label/type，type可选${FIELD_TYPES.join('/')}；可带description、unit、order、summary（是否放摘要）、min/max及integer（数值约束）。choice必须有字符串options，collection必须有columns（id/label/type及对应约束，不能嵌套collection）。`,
