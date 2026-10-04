@@ -217,7 +217,7 @@ export function applyFrameworkTransaction(previous, raw, { actor = 'model' } = {
     keys(raw, ['protocol', 'id', 'baseRevision', 'ops']);
     if (raw.protocol !== 1) fail('version', '事务协议版本不支持');
     identifier(raw.id); sequence(raw.ops, 256);
-    if (!raw.ops.length) fail('empty', '更新操作不能为空');
+    if (!raw.ops.length && !previous.initialized) fail('empty', '尚未初始化，不能用空操作确认完成');
     const payload = canonical(raw);
     const applied = previous.applied.find(entry => entry.id === raw.id);
     if (applied) {

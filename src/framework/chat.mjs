@@ -1,5 +1,5 @@
 import { emptyFramework, cloneFramework, applyFrameworkTransaction } from './state.mjs';
-import { applyFrameworkReply, buildFrameworkInstructions } from './protocol.mjs';
+import { applyFrameworkReply, buildFrameworkInstructions, FrameworkProtocolError } from './protocol.mjs';
 import { readFrameworkBranch, writeFrameworkSnapshot } from './snapshots.mjs';
 import { frameworkFailure } from './diagnostics.mjs';
 import { readRepair, writeRepair, repairable, repairPrompt, correctedResult } from './repair.mjs';
@@ -70,6 +70,7 @@ export class FrameworkChat {
         try {
             const result = applyFrameworkReply(message.mes, before);
             if (!result.accepted) {
+                if (!result.diagnostic) throw new FrameworkProtocolError('missing_protocol', '本轮没有数据回执；请检查叙事中的变化或明确确认无变化');
                 this.observe(message, { status: 'no_protocol', ...result.diagnostic, baseRevision: before.revision });
                 g.handled.add(message); this.render(this.state());
                 if (result.diagnostic) this.report('检测到示例、引用或代码块内的框架标签；这些内容未作为更新执行，请查看数据更新诊断。');
@@ -130,7 +131,11 @@ export class FrameworkChat {
     async retryRepair(message) {
         if (!this.active() || this.saving || this.repairJob || this.uncertainSaves.has(message) || this.getContext().chat.at(-1) !== message || snapFor(message)?.reply === message?.mes) return false;
         const ctx = this.getContext(), before = readFrameworkBranch(ctx.chat.slice(0,-1));
-        try { applyFrameworkReply(message.mes, before); return false; }
+        try {
+            const result = applyFrameworkReply(message.mes, before);
+            if (!result.accepted && !result.diagnostic) throw new FrameworkProtocolError('missing_protocol', '本轮没有数据回执');
+            return false;
+        }
         catch (error) {
             if (!repairable(frameworkFailure(error))) return false;
             return this.repair(message, before, error, null, true);

@@ -58,8 +58,46 @@ test('identical rejected output stops early and disabled mode sends nothing',asy
     const h=harness(async()=>wrap(bad));await h.controller.receive(h.reply);assert.equal(h.requests.length,2);
     const off=harness(undefined,0);await off.controller.receive(off.reply);assert.equal(off.requests.length,0);assert.equal(off.saved.length,0);
 });
-test('a missing protocol on a normal reply is not automatically retried',async()=>{
-    const h=harness();h.reply.mes='Nothing has changed.';await h.controller.receive(h.reply);assert.equal(h.requests.length,0);
+test('omitted receipt is checked quietly; explicit no-change receipt preserves gameplay data',async()=>{
+    const h=harness(async()=>wrap(tx([],'checked')));h.reply.mes='Nothing has changed.';
+    const before=structuredClone(h.controller.state());
+    assert.equal(await h.controller.receive(h.reply),true);assert.equal(h.requests.length,1);
+    assert.equal(h.reply.mes,'Nothing has changed.');assert.equal(h.ctx.chat.length,3);
+    assert.equal(h.controller.state().revision,2);assert.deepEqual(h.controller.state().values,before.values);
+    assert.deepEqual(h.controller.state().entities,before.entities);
+    assert.equal(readRepair(h.reply).failure.code,'missing_protocol');
+    assert.match(h.requests[0].at(-1).content,/遗漏数据回执/);
+    assert.equal(await h.controller.receive(h.reply),false);assert.equal(h.requests.length,1);
+});
+
+test('omitted NPC update is repaired without inventing a user message or altering narrative',async()=>{
+    const npc={op:'create',target:'entity',definition:{id:'engineer',kind:'npc',label:'Engineer',description:'Speaking at the guide screen',visual:{mode:'portrait',subject:'person',description:'Brown jacket, scar above left eyebrow'}}};
+    const h=harness(async()=>wrap(tx([npc],'met_engineer')));h.reply.mes='An engineer in a brown jacket, scar above his left eyebrow, answers by the guide screen.';
+    const raw=h.reply.mes;assert.equal(await h.controller.receive(h.reply),true);
+    assert.equal(h.controller.state().entities.at(-1).id,'engineer');assert.equal(h.reply.mes,raw);
+    assert.deepEqual(h.requests[0].filter(m=>m.role==='user').map(m=>m.content),['I accept the restraints.']);
+    assert.equal(h.controller.state().values.credits,50000);
+});
+
+test('disabled automatic omission correction sends zero calls and permits explicit retry',async()=>{
+    const h=harness(async()=>wrap(tx([],'checked')),0);h.reply.mes='Nothing changed.';
+    assert.equal(await h.controller.receive(h.reply),false);assert.equal(h.requests.length,0);
+    assert.equal(h.observed.at(-1).status,'missing_protocol');
+    assert.equal(await h.controller.retryRepair(h.reply),true);assert.equal(h.requests.length,1);
+});
+
+test('explicit no-change receipt does not call correction and respects revision/replay rules',async()=>{
+    const h=harness();h.reply.mes='Nothing changed.\n'+wrap(tx([],'checked'));
+    assert.equal(await h.controller.receive(h.reply),true);assert.equal(h.requests.length,0);
+    assert.equal(h.controller.state().revision,2);assert.equal(h.reply.mes,'Nothing changed.');
+    const same=applyFrameworkTransaction(h.controller.state(),tx([],'checked'));assert.equal(same.duplicate,true);
+    assert.throws(()=>applyFrameworkTransaction(h.controller.state(),tx([],'stale')),/状态已变化/);
+    assert.throws(()=>applyFrameworkTransaction(emptyFramework(),{protocol:1,id:'empty',baseRevision:0,ops:[]}),/尚未初始化/);
+});
+
+test('quoted protocol examples never trigger automatic omission correction',async()=>{
+    const h=harness();h.reply.mes='```json\n'+wrap(good)+'\n```';
+    assert.equal(await h.controller.receive(h.reply),false);assert.equal(h.requests.length,0);
 });
 for(const [name,mutate] of [
     ['new player turn',h=>h.ctx.chat.push({is_user:true,mes:'New action'})],

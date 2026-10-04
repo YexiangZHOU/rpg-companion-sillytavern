@@ -86,7 +86,7 @@ function renderDiagnostics() {
             const details = node('details',''); details.append(node('summary','',text('查看纠错记录（含本聊天原始数据）','Review correction record (includes private chat data)')));
             details.append(node('pre','',JSON.stringify(record,null,2))); item.append(details);
         }
-        if (row.message === getContext().chat.length && ['parse_rejected','validation_rejected'].includes(row.status)) {
+        if (row.message === getContext().chat.length && ['parse_rejected','validation_rejected','missing_protocol','no_protocol'].includes(row.status) && frameworkChat.active() && getContext().chat.slice(0,-1).some(m=>m.is_user)) {
             const message = getContext().chat[row.message-1];
             const retry = node('button','menu_button',text('后台修正此回复','Correct this reply in the background')); retry.type = 'button';
             retry.disabled = is_send_press || !!frameworkChat.repairJob || frameworkChat.saving || frameworkChat.uncertainSaves.has(message);

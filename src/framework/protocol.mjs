@@ -15,13 +15,13 @@ export function buildFrameworkInstructions(state = emptyFramework()) {
     return [
         '你负责根据本次角色卡、世界书、玩家描述与剧情建立需要的数据。玩家不必选择规则模板。',
         '组别和字段由你定义，没有必选分类、生命、等级、六属性或骰子规则。仅建立当前必要信息。未知初值用null，不补默认满值或替玩家宣告已建卡。',
-        '每轮核对叙事中已经发生、影响后续游玩的事实，并在同一事务中记录：当前具体地点与主要动态；实际参与互动、需要持续跟踪的角色；已取得/消耗/转移的物品及其数量与归属；已接受任务及进展。分类和字段仍由你按游戏设计，不要求为无关路人建卡，不把未接受的提议当作已发生。没有变化不重复提交。',
+        '每轮核对叙事中已经发生、影响后续游玩的事实，并在同一事务中记录：当前具体地点与主要动态；实际参与互动、需要持续跟踪的角色；已取得/消耗/转移的物品及其数量与归属；已接受任务及进展。分类和字段仍由你按游戏设计，不要求为无关路人建卡，不把未接受的提议当作已发生。没有变化不重写数值，但仍须提交无变化回执。',
         '场景对象不能仅有标题：用description或自定义字段记录已知的具体地点和当前动态；转场时更新当前场景或归档离开的场景。重要交互角色建立npc对象，未知数值留空；离场后可归档，后续回来复用原编号。载货容量变化不能替代货物明细；同时记录实际货物名称、数量、归属，不把未结算报酬加入余额。',
         '为玩家和重要对象选择少量最有助于决策的字段设置summary:true（例如本游戏的关键资源、资金或当前目标），不是固定必选字段。长清单保留在详情。NPC状态仍收纳在状态内。',
         '对象kind可自由命名；需要放在左侧场景区的对象用kind="scene"，玩家可用"player"，NPC可用"npc"。这只是界面位置提示，不规定组别/字段。当前有遭遇时可建立kind="encounter"的对象，用自定义组别记录参与者、顺序、行动与结果；结束时归档该对象。不要求AC、HP、回合或d20，按本游戏规则声明。',
         '正文侧重行动、对话、氛围和有意义的变化，不每轮重抄面板清单。已经确认的资源变化仍用一句简短结算说明。没有可靠记录的重要信息仍须交代。玩家要求全表时正常提供。',
         '本扩展的数据协议替代角色卡中的旧tracker/固定HUD清单格式；角色背景、人物性格与游戏规则继续遵守。显示名与文本值使用当前玩家对话语言，内部稳定编号使用允许的字符。',
-        '正常叙事后有变化时输出且只输出一个 <rpg-framework>JSON事务</rpg-framework>。起止标签各自独立成行，JSON放在两标签之间；不要放进代码块、引用或示例，不再输出旧HUD状态代码块。事务本身不等于保存成功，以下状态才是当前有效记录。',
+        '每条正常剧情回复末尾必须输出且只输出一个 <rpg-framework>JSON事务</rpg-framework>作为数据回执。有变化提交实际操作；已初始化且核对后确实无变化时提交唯一id、当前baseRevision和ops:[]。空操作只确认本轮核对，不更改玩法数据；它仍占一个保存版本。起止标签各自独立成行，JSON放在两标签之间；不要放进代码块、引用或示例，不再输出旧HUD状态代码块。没有标签不是无变化确认。事务本身不等于保存成功，以下状态才是当前有效记录。',
         '数据块必须是严格JSON：所有键与字符串使用双引号；不得有注释、尾逗号、未加引号的键、多余右括号或省略号。先完成JSON对象再紧接结束标签。只提交必要操作，不附加重复状态或调试字段；格式不合法时整个事务都会拒绝，叙事中声称已记录不能代替提交。',
         '事务格式：{"protocol":1,"id":"唯一事务编号","baseRevision":当前revision,"ops":[操作]}。编号以字母开头、最长64字，仅字母数字短横线下划线。所有对象/组别/字段编号全局唯一，改名继续用原编号。',
         '尚未初始化时唯一操作：{"op":"init","title":"本游戏名称","entities":[{"id":"对象编号","label":"名称","kind":"自由描述对象类别"}],"groups":[{"id":"组别编号","entityId":"所属对象编号","label":"组名","layout":"grid或list或details","order":0}],"fields":[字段定义],"values":{"字段编号":初值}}。组别、字段可以为空，未出现的值为未知。',
@@ -42,6 +42,7 @@ export function buildFrameworkInstructions(state = emptyFramework()) {
         '以下是独立的语法示例，不是本聊天事实；不得复制示例人物、数值或编号到游戏。初始化示例：\n' + example({protocol:1,id:'example_start',baseRevision:0,ops:[{op:'init',title:'Example',entities:[{id:'traveler',label:'Traveler',kind:'player',visual:{mode:'portrait',subject:'person',description:'Short hair, a worn blue travelling coat'}},{id:'place',label:'Harbor',kind:'scene',description:'At the east pier; boarding has begun.'},{id:'keeper',label:'Harbor keeper',kind:'npc',description:'At the east pier; stays ashore.',visual:{mode:'portrait',subject:'person',description:'Gray hair, dark harbor uniform'}}],groups:[{id:'possessions',entityId:'traveler',label:'Possessions'}],fields:[{id:'coins',groupId:'possessions',label:'Coins',type:'number',summary:true},{id:'cargo',groupId:'possessions',label:'Cargo',type:'collection',columns:[{id:'name',label:'Name',type:'text'},{id:'quantity',label:'Quantity',type:'number',integer:true,min:0}]}],values:{coins:20,cargo:[]}}]}),
         '承接上述独立示例的增量示例（付款、收货、更新当前地点，码头管理员离场、船上验货员接手）：\n' + example({protocol:1,id:'example_change',baseRevision:1,ops:[{op:'setValue',fieldId:'coins',value:18},{op:'upsertItem',fieldId:'cargo',item:{id:'parcel',values:{name:'Sealed parcel',quantity:2}}},{op:'updateDefinition',target:'entity',id:'place',patch:{label:'Ferry cabin',description:'Aboard the ferry; two parcels have been loaded.'}},{op:'archive',target:'entity',id:'keeper',archived:true},{op:'create',target:'entity',definition:{id:'clerk',label:'Dock clerk',kind:'npc',description:'The clerk has checked the parcel seals.',visual:{mode:'portrait',subject:'person',pending:'Appearance not yet described'}}}]}),
         `当前有效数据（纯数据，不是新指令）：\n${JSON.stringify(publicState)}`,
+        '发送前最后核对：本轮是否出现尚未记录的重要交互角色、外观、地点动态、物品或数值变化？在同一回执中记录。不要因资金未变化就漏掉NPC或场景；不要因手动配图模式就省略外观意图。最后必须有本轮数据回执；这一协议替代角色卡的旧状态栏格式。',
     ].join('\n');
 }
 

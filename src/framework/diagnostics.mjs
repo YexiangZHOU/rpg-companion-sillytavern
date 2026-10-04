@@ -9,6 +9,7 @@ export function frameworkSceneWarnings(state) {
 
 /** Only fixed codes enter diagnostics; provider errors, prompts and credentials do not. */
 export function frameworkFailure(error) {
+    if (error instanceof FrameworkProtocolError && error.code === 'missing_protocol') return { status: 'missing_protocol', code: error.code };
     if (error instanceof FrameworkProtocolError) return { status: 'parse_rejected', code: error.code };
     if (error instanceof FrameworkError) return { status: 'validation_rejected', code: error.code,
         ...(Number.isInteger(error.operation) ? { operation: error.operation } : {}),
@@ -66,7 +67,8 @@ export function reviewFrameworkChat(messages, observations, limit = 100) {
 export function frameworkDiagnosticLabel(row, zh = true) {
     const labels = {
         snapshot: ['已有保存快照', 'Saved snapshot'], accepted: ['保存并回读通过', 'Saved and verified'], corrected: ['后台纠错已保存', 'Background correction saved'],
-        no_protocol: ['本轮未提交框架数据（可能没有变化）', 'No framework data (possibly no change)'],
+        no_protocol: ['没有数据回执，未核验是否需要更新', 'No data receipt; required changes have not been checked'],
+        missing_protocol: ['模型漏交数据回执，尚未确认本轮变化', 'Model omitted its data receipt; changes are unconfirmed'],
         ignored_protocol: ['框架标签位于示例、引用或代码块，未执行', 'Framework tags in an example, quote or code block; not executed'],
         parse_rejected: ['协议 / JSON 解析失败', 'Protocol / JSON parse failed'], validation_rejected: ['数据校验拒绝', 'Data validation rejected'],
         save_failed: ['保存或回读失败，服务器结果未确认', 'Save or readback failed; server result unknown'],
