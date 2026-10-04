@@ -15,7 +15,7 @@ export function buildFrameworkInstructions(state = emptyFramework()) {
         '事务格式：{"protocol":1,"id":"唯一事务编号","baseRevision":当前revision,"ops":[操作]}。编号以字母开头、最长64字，仅字母数字短横线下划线。所有对象/组别/字段编号全局唯一，改名继续用原编号。',
         '尚未初始化时唯一操作：{"op":"init","title":"本游戏名称","entities":[{"id":"对象编号","label":"名称","kind":"自由描述对象类别"}],"groups":[{"id":"组别编号","entityId":"所属对象编号","label":"组名","layout":"grid或list或details","order":0}],"fields":[字段定义],"values":{"字段编号":初值}}。组别、字段可以为空，未出现的值为未知。',
         `字段定义：id/groupId/label/type，type可选${FIELD_TYPES.join('/')}；可带description、unit、order、summary（是否放摘要）、min/max及integer（数值约束）。choice必须有字符串options，collection必须有columns（id/label/type及对应约束，不能嵌套collection）。`,
-        'number是JSON数字，可负数/小数，取决于定义；resource为{"current":数值,"max":数值}且当前值在允许范围；boolean是true/false；text是文字；choice是一个已定义选项；tags是字符串数组；collection初值是[{"id":"稳定条目编号","values":{"列编号":值}}]，空数组代表已知没有条目，null代表未知。',
+        'number是JSON数字，可负数/小数，取决于定义；resource为{"current":数值,"max":数值}且当前值在允许范围；boolean是true/false；text是文字；choice是一个已定义选项；tags是字符串列表，允许同名文字重复且保留数量，不作为对象编号；需要逐件更新、数量或其他细节时用collection。collection初值是[{"id":"稳定条目编号","values":{"列编号":值}}]，条目编号不能重复；choice的options也不能重复。空数组代表已知没有条目，null代表未知。',
         '后续ops可选：create（target为entity/group/field，definition为对应定义）；updateDefinition（target/id/patch改名字/说明/顺序等）；setValue（fieldId/value写绝对值）；upsertItem（fieldId/item合并指定条目）；archiveItem（fieldId/itemId/archived）；archive（target/id/archived归档或恢复定义）。',
         '不能更改已有字段的type/id或把字段移到另一个对象；出现不同类型请创建新字段。集合可由null设为空数组，其余情况按条目更新，不能整批覆盖；updateDefinition可新增集合列，但已有列的id和type须保留。没有提到的条目继续保留。不要每轮初始化或重建结构，遇到新机制才新增。',
         '结构锁和数值锁由玩家控制，模型不能setLock或绕过锁。锁定值保持原值，未变化可省略。不读取其他聊天数据。不要执行脚本，不输出HTML或任意代码作为控件。',

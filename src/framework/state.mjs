@@ -110,7 +110,8 @@ export function validateFieldValue(value, definition) {
             if (value.max <= (definition.min ?? 0) || value.current < (definition.min ?? 0) || value.current > value.max) fail('range', `${definition.label}的当前值或上限不合法`);
             break;
         }
-        case 'tags': sequence(value, 32).forEach(tag => string(tag, 160)); unique(value); break;
+        // Labels carry no identity. Preserve repeated entries and their quantity.
+        case 'tags': sequence(value, 32).forEach(tag => string(tag, 160)); break;
         case 'collection': {
             sequence(value, FRAMEWORK_LIMITS.items);
             unique(value.map(item => identifier(item.id)));
