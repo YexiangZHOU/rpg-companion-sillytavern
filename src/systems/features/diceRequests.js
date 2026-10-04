@@ -1,5 +1,6 @@
 /** Model requests, native tools, chat-local persistence and real ST send flow. */
 import { getContext } from '../../../../../../extensions.js';
+import { isUniversalFramework } from '../../framework/mode.js';
 import { ToolManager } from '../../../../../../tool-calling.js';
 import { eventSource,event_types,saveChatDebounced,setExtensionPrompt,extension_prompt_types,extension_prompt_roles,is_send_press,messageFormatting } from '../../../../../../../script.js';
 import { extensionSettings } from '../../core/state.js';
@@ -172,6 +173,7 @@ export function beginDiceGeneration(type,data,dryRun) {
             '\n只在正常主回复末尾输出 <rpg-roll>{"id":"check_1","actor":"主体名字","actorType":"player","reason":"检定原因","count":1,"sides":20,"modifier":0,"advantage":"normal","dc":12}</rpg-roll>。多项先攻每项使用唯一id和完整起止标签，禁止裸JSON；advantage可为normal/advantage/disadvantage；未知DC为null。等待程序/玩家提供结果。不要在跟踪JSON、代码块、想法或背景摘要里输出检定。';
     }
     if(!normal && generation)generation.toolsAllowed=false;
+    if (prompt && isUniversalFramework()) prompt += '\n这是通用游戏，不预设D&D、d20、AC或六属性。依据本游戏已声明规则设置count/sides/modifier；上述1d20只是格式例子。当前支持NdM加整数修正，公开dc可为null。若规则需要不同骰池结算，先取得真实原始骰点再按已声明规则解释，不编造骰点。';
     setExtensionPrompt('rpg-dice-check',prompt,extension_prompt_types.IN_CHAT,0,false,extension_prompt_roles.SYSTEM);
 }
 export async function invokeDiceTool(input) {

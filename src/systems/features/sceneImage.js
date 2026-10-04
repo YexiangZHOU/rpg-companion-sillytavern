@@ -1,5 +1,8 @@
 /** Chat/branch-scoped dynamic scene illustrations, through the registered native sd callback. */
 import { getContext } from '../../../../../../extensions.js';
+import { isUniversalFramework } from '../../framework/mode.js';
+import { readFrameworkBranch } from '../../framework/snapshots.mjs';
+import { frameworkVisual } from '../../framework/visual.mjs';
 import { saveChatDebounced } from '../../../../../../../script.js';
 import { SlashCommandParser } from '../../../../../../slash-commands/SlashCommandParser.js';
 import { safeGenerateRaw } from '../../utils/responseExtractor.js';
@@ -14,6 +17,11 @@ const inflight=new WeakSet();
 export const sceneImageMode=()=>actionPreference('sceneMode',extensionSettings.sceneImageMode??'manual');
 export function sceneData(create=false){const m=getContext().chatMetadata;if(!m)return null;if(create)m.rpg_scene_image_v1??={version:1,images:{},selected:null,context:null,locked:false};return m.rpg_scene_image_v1??null;}
 export function visualScene(summary=''){
+    if (isUniversalFramework()) {
+        const latest=[...getContext().chat].reverse().find(m=>!m.is_user&&!m.is_system);
+        const visible=String(latest?.mes??'').replace(/<rpg-[a-z-]+>[\s\S]*?<\/rpg-[a-z-]+>/g,'').replace(/<think>[\s\S]*?<\/think>/g,'').slice(-2200);
+        return frameworkVisual(readFrameworkBranch(getContext().chat),summary||visible);
+    }
     const info=parse(lastGeneratedData.infoBox||committedTrackerData.infoBox),chars=parse(lastGeneratedData.characterThoughts||committedTrackerData.characterThoughts);
     const entries=Array.isArray(chars.characters)?chars.characters:Array.isArray(chars)?chars:[];
     const cast=entries.filter(c=>c.name&&!/不在场|not present|absent/i.test(c.description??c.details?.demeanor??c.details?.Demeanor??'')).slice(0,20).map(c=>({name:String(c.name).slice(0,120),appearance:String(c.details?.appearance??c.details?.Appearance??'').slice(0,900),visibleAction:String(c.description??c.details?.demeanor??c.details?.Demeanor??'').slice(0,500)}));
@@ -71,7 +79,7 @@ export async function generateSceneImage(force=true){
     },valid);}catch(e){record.status='failed';if(getContext().chatMetadata===meta)saveChatDebounced();throw e;}finally{inflight.delete(meta);if(record.status==='pending'){record.status='interrupted';if(getContext().chatMetadata===meta)saveChatDebounced();}renderSceneImage();}
 }
 export function renderSceneImage(){
-    const parent=document.querySelector('#rpg-info-box .rpg-info-content')??document.querySelector('#rpg-info-box');if(!parent||!extensionSettings.enabled)return;
+    const parent=isUniversalFramework()?document.querySelector('#rpg-framework-scene-images'):document.querySelector('#rpg-info-box .rpg-info-content')??document.querySelector('#rpg-info-box');if(!parent||!extensionSettings.enabled)return;
     parent.querySelector('.rpg-scene-image')?.remove();if(sceneImageMode()==='off')return;
     const section=node('details','rpg-scene-image');section.open=true;section.append(node('summary','',tr('sceneImage')));
     const data=sceneData(),record=data?.images?.[data.selected];

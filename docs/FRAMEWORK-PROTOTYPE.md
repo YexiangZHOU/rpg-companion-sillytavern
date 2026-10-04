@@ -1,5 +1,7 @@
 # 通用框架第一阶段：数据内核与可交互原型
 
+本文件为第一阶段历史结果。第二阶段本地聊天接入进度与当前边界见[接入说明](FRAMEWORK-INTEGRATION.md)，下文“尚未接入”指第一阶段结束时。
+
 ## 已实现
 
 - state.mjs：游戏定义和值分离，对象/组别/字段稳定编号；number/text/boolean/choice/resource/tags/collection 控件类型。新结构为空，没有任何默认游戏字段。

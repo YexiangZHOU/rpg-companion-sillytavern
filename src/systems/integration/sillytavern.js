@@ -1,4 +1,5 @@
 import { restoreNumericPayload, readPayload } from '../generation/numericState.mjs';
+import { isUniversalFramework } from '../../framework/mode.js';
 import { activePortrait, actionState } from '../features/actionStore.js';
 /**
  * SillyTavern Integration Module
@@ -353,6 +354,7 @@ function rerenderRpgState() {
 }
 
 export function scheduleChatStateRehydration() {
+    if (isUniversalFramework()) { chatStateRehydrateRunId++; return; }
     chatStateRehydrateRunId++;
     const runId = chatStateRehydrateRunId;
     let attempts = 0;
@@ -405,6 +407,7 @@ export function scheduleChatStateRehydration() {
 }
 
 export function onChatLoaded() {
+    if (isUniversalFramework()) { togetherAvatars.invalidate(); setIsAwaitingNewMessage(false); return; }
     togetherAvatars.invalidate();
     setIsAwaitingNewMessage(false);
     loadChatData();
@@ -439,6 +442,7 @@ function syncDisplayedTrackerStateFromChat() {
  * In together mode, commits displayed data (only for real messages, not streaming placeholders).
  */
 export function onMessageSent() {
+    if (isUniversalFramework()) return;
     if (!extensionSettings.enabled) return;
 
     // console.log('[RPG Companion] 🟢 EVENT: onMessageSent - lastActionWasSwipe =', lastActionWasSwipe);
@@ -473,6 +477,7 @@ export function onMessageSent() {
  * Event handler for when a message is generated.
  */
 export async function onMessageReceived(data) {
+    if (isUniversalFramework()) return;
     const freshTogetherReply = isAwaitingNewMessage;
     let avatarRequest = null;
     // console.log('[RPG Companion] onMessageReceived called, lastActionWasSwipe:', lastActionWasSwipe);
@@ -683,6 +688,7 @@ export async function onMessageReceived(data) {
  * Event handler for character change.
  */
 export function onCharacterChanged() {
+    if (isUniversalFramework()) { togetherAvatars.invalidate(); incrementSeparateGenerationId(); setIsAwaitingNewMessage(false); return; }
     togetherAvatars.invalidate();
     setIsAwaitingNewMessage(false);
     // Remove thought panel and icon when changing characters
@@ -737,6 +743,7 @@ export function onCharacterChanged() {
  * Loads the RPG data for the swipe the user navigated to.
  */
 export function onMessageSwiped(messageIndex) {
+    if (isUniversalFramework()) return;
     togetherAvatars.invalidate();
     if (!extensionSettings.enabled) {
         return;
@@ -827,6 +834,7 @@ export function onMessageSwiped(messageIndex) {
 }
 
 export function onMessageDeleted() {
+    if (isUniversalFramework()) return;
     togetherAvatars.invalidate();
     if (!extensionSettings.enabled) {
         return;

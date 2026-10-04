@@ -5,5 +5,6 @@
 src/framework/** text eol=lf
 examples/universal-rpg/** text eol=lf
 test/framework-state.test.mjs text eol=lf
+test/framework-chat.test.mjs text eol=lf
 docs/UNIVERSAL-RPG-FRAMEWORK.md text eol=lf
 docs/FRAMEWORK-PROTOTYPE.md text eol=lf

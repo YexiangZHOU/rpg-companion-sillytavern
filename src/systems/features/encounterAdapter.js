@@ -1,5 +1,7 @@
 /** Adapt the original EncounterModal UI to the main chat, without a second LLM loop. */
 import { getContext } from '../../../../../../extensions.js';
+import { isUniversalFramework } from '../../framework/mode.js';
+import { renderFrameworkEncounter, draftFrameworkAction } from '../../framework/runtime.js';
 import { extensionSettings } from '../../core/state.js';
 import { updateCurrentEncounter,resetEncounter } from './encounterState.js';
 import { actionState,actionData,saveActionSnapshot,latestActionMessage } from './actionStore.js';
@@ -18,6 +20,7 @@ export function nativeCombatView(state) {
 export function closeNativeEncounter(modal){modal.modal?.classList.remove('is-open');}
 export function hideNativeEncounter(){if(instance)closeNativeEncounter(instance);resetEncounter();}
 export function draftNativeAction(modal,text) {
+    if (isUniversalFramework()) return draftFrameworkAction(modal,text);
     const b=actionState().encounter;
     if(!b||['ended','proposed','awaiting_initiative','awaiting_roll','awaiting_settlement'].includes(b.phase)){toastr.info(tr('waitRoll'));return false;}
     const input=document.getElementById('send_textarea');if(!input)return false;
@@ -27,6 +30,7 @@ export function draftNativeAction(modal,text) {
 export function openNativeEncounter(modal) {
     if(!extensionSettings.enabled||!getContext().chat?.length)return;
     instance=modal;
+    if (isUniversalFramework()) { renderFrameworkEncounter(modal); modal.modal.classList.add('is-open'); return; }
     const b=actionState().encounter;
     if(!b||b.phase==='ended'){requestStart?.();return;}
     if(!modal.modal)modal.createModal();
@@ -34,6 +38,7 @@ export function openNativeEncounter(modal) {
 }
 export function refreshNativeEncounter() {
     if(!instance?.modal)return;
+    if (isUniversalFramework()) { if(instance.modal.classList.contains('is-open')) renderFrameworkEncounter(instance); return; }
     const state=actionState(),b=state.encounter;if(!b||!extensionSettings.enabled){hideNativeEncounter();return;}
     const m=instance,view=nativeCombatView(state);
     // Original renderers interpolate HTML. Only validated, escaped text reaches them.

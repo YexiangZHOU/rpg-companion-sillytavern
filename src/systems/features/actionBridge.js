@@ -1,4 +1,5 @@
 import { encounterModal } from '../ui/encounterUI.js';
+import { isUniversalFramework } from '../../framework/mode.js';
 import { setNativeStartHandler,refreshNativeEncounter,hideNativeEncounter } from './encounterAdapter.js';
 import { acceptSceneRequest,renderSceneImage,restoreSceneBranch,sceneImageMode } from './sceneImage.js';
 /** Original encounter UI backed by main-chat dice, snapshots and resources. */
@@ -53,12 +54,14 @@ export function renderActionMessages() {
     }
 }
 function persistReconciliation() {
+    if (isUniversalFramework()) return;
     const state=cloneAction(actionState()),player=state.player;
     const dex=player?{[player.id]:readSheet(extensionSettings.characterSheetState).attributes.dex??0}:{};
     if(reconcileEncounter(state,records(),dex))saveActionSnapshot(latestActionMessage(),state);
     refresh();
 }
 export function beginActionGeneration(type,data,dryRun) {
+    if (isUniversalFramework()) { generation = null; setExtensionPrompt('rpg-actions','',extension_prompt_types.IN_CHAT,0,false); return; }
     const ctx=getContext();
     const normal=extensionSettings.enabled&&!dryRun&&!['quiet','impersonate','continue'].includes(type)&&!data?.quietImage&&!data?.quiet_image&&!data?.isImageGeneration&&!evaluateSuppression(extensionSettings,ctx,data).shouldSuppress;
     let prompt='';

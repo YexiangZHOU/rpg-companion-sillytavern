@@ -1,17 +1,17 @@
 {
   "name": "rpg-complanion-sillytavern",
-  "version": "3.7.4",
+  "version": "3.7.5",
   "description": "",
   "main": "index.js",
   "scripts": {
     "validate_locale": "node src/i18n/validator.js --watch",
     "validate_locale_once": "node src/i18n/validator.js",
-    "test:framework": "node --test test/framework-state.test.mjs",
+    "test:framework": "node --test test/framework-state.test.mjs test/framework-chat.test.mjs",
     "preview:framework": "node examples/universal-rpg/build-preview.mjs"
   },
   "keywords": [],
   "author": "",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "devDependencies": {
     "chokidar": "^5.0.0",
     "fs-extra": "^11.3.3",

@@ -1,4 +1,5 @@
 import { stripScenes } from './sceneProtocol.mjs';
+import { stripAcceptedPortraits } from '../../framework/visual.mjs';
 import { getContext } from '../../../../../../extensions.js';
 import { saveChatDebounced } from '../../../../../../../script.js';
 import { emptyActions,scanActionBlocks,hideActionBlocks } from './actionProtocol.mjs';
@@ -45,5 +46,5 @@ export function stripAcceptedActions(raw,message) {
     const scene=message.extra?.rpg_scene_swipes?.[message.swipe_id??0];
     let out=scene?.revision===replyRevision(message.mes)?stripScenes(raw,scene.spans??[],message.mes):String(raw);
     if(snap?.revision===replyRevision(message.mes)){try{out=hideActionBlocks(out,scanActionBlocks(out,{encounterId:snap.state?.encounter?.id}));}catch{}}
-    return out;
+    return stripAcceptedPortraits(out,message);
 }

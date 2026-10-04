@@ -4,6 +4,7 @@
  */
 
 import { chat, eventSource } from '../../../../../../../script.js';
+import { isUniversalFramework } from '../../framework/mode.js';
 import { executeSlashCommandsOnChatInput } from '../../../../../../../scripts/slash-commands.js';
 import { safeGenerateRaw, extractTextFromResponse } from '../../utils/responseExtractor.js';
 
@@ -220,6 +221,7 @@ export async function switchToPreset(presetName) {
  * @param {Function} renderInventory - UI function to render inventory
  */
 export async function updateRPGData(renderUserStats, renderInfoBox, renderThoughts, renderInventory, generationId = null) {
+    if (isUniversalFramework()) return;
     if (isGenerating) {
         // console.log('[RPG Companion] Already generating, skipping...');
         return;

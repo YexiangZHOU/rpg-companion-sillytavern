@@ -1,4 +1,5 @@
 import { readPayload, readSheet, legacySheet, emptySheet, syncMode, restoreNumericPayload, manualSheetEdit } from '../systems/generation/numericState.mjs';
+import { isUniversalFramework } from '../framework/mode.js';
 /**
  * Core Persistence Module
  * Handles saving/loading extension settings and chat data
@@ -700,6 +701,7 @@ export function saveSettings() {
  * Saves RPG data to the current chat's metadata.
  */
 export function saveChatData() {
+    if (isUniversalFramework()) return;
     if (!isChatDataSaveReady()) {
         hasDeferredChatDataSave = true;
         return;

@@ -11,12 +11,17 @@ const node = (tag, className, text) => {
     return element;
 };
 const button = (label, callback, className = 'uf-button') => {
-    const element = node('button', className, label); element.type = 'button'; element.addEventListener('click', callback); return element;
+    const element = node('button', className, label); element.type = 'button'; element.addEventListener('click', async event => {
+        try { await callback(event); } catch (failure) {
+            const root=element.closest('.uf-panel');if(!root)return;
+            root.querySelector('.uf-operation-error')?.remove();const error=node('p','uf-operation-error',failure.message);error.setAttribute('role','alert');root.append(error);
+        }
+    }); return element;
 };
 
 export class FrameworkPanel {
-    constructor(root, { onOperation, language = 'zh' } = {}) {
-        this.root = root; this.onOperation = onOperation; this.strings = panelStrings[language] ?? panelStrings.zh;
+    constructor(root, { onOperation, language = 'zh', getPortrait } = {}) {
+        this.root = root; this.onOperation = onOperation; this.getPortrait = getPortrait; this.strings = panelStrings[language] ?? panelStrings.zh;
         this.entityId = null; this.selected = new Map(); this.opened = new Map(); this.scrollPositions = new Map(); this.renderedGroup = null; this.serial = 0;
         root.classList.add('uf-panel');
     }
@@ -53,8 +58,10 @@ export class FrameworkPanel {
         const header = node('header', 'uf-header');
         const identity = node('div', 'uf-identity');
         const portrait = node('div', 'uf-avatar', entity?.label.slice(0, 1) ?? '◇'); portrait.setAttribute('aria-hidden', 'true');
+        const portraitUrl = entity && this.getPortrait?.(entity);
+        if (portraitUrl) { const img = node('img', 'uf-avatar-image'); img.src = portraitUrl; img.alt = entity.label; img.addEventListener('error', () => img.remove(), { once: true }); portrait.append(img); }
         const names = node('div', 'uf-names'); names.append(node('h2', '', entity?.label ?? state.title));
-        if (entity?.kind) names.append(node('p', '', entity.kind));
+        if (entity?.kind) names.append(node('p', '', ({ zh:{player:'玩家',npc:'角色',scene:'场景',encounter:'遭遇'},en:{player:'Player',npc:'Character',scene:'Scene',encounter:'Encounter'} }[t === panelStrings.zh ? 'zh':'en'][entity.kind]) ?? entity.kind));
         if (entities.length > 1) {
             const label = node('label', 'uf-entity-label', t.actor);
             const select = node('select', 'uf-select'); select.setAttribute('aria-label', t.actor); select.dataset.focus = 'entity';
@@ -64,6 +71,7 @@ export class FrameworkPanel {
             label.append(select); names.append(label);
         }
         identity.append(portrait, names); header.append(identity);
+        if(entity?.description){const detail=this.details(`entity_${entity.id}`,t.description);detail.dataset.detail=`entity_${entity.id}`;detail.append(node('p','',entity.description));header.append(detail);}
         const groups = activeFrameworkGroups(state, this.entityId);
         const allFields = groups.flatMap(group => activeFrameworkFields(state, group.id));
         const summaries = node('div', 'uf-summaries');
@@ -97,7 +105,7 @@ export class FrameworkPanel {
             const fields = activeFrameworkFields(state, group.id);
             const grid = node('div', `uf-fields uf-layout-${group.layout}`);
             for (const field of fields) grid.append(this.fieldView(field));
-            content.append(grid);
+            if(group.layout==='details'){const detail=this.details(`group_${group.id}`,t.details);detail.dataset.detail=`group_${group.id}`;detail.append(grid);content.append(detail);}else content.append(grid);
             if (!fields.length) content.append(node('p', 'uf-description', t.restoreHint));
         }
         this.root.append(content);
@@ -159,9 +167,10 @@ export class FrameworkPanel {
         const error = node('p', 'uf-form-error'); error.setAttribute('role', 'alert'); form.append(error);
         const actions = node('div', 'uf-form-actions'); actions.append(button(t.cancel, () => dialog.close()));
         const save = node('button', 'uf-button uf-primary', t.save); save.type = 'submit'; actions.append(save); form.append(actions);
-        form.addEventListener('submit', event => {
+        form.addEventListener('submit', async event => {
             event.preventDefault();
-            try { submit(read()); dialog.close(); } catch (failure) { error.textContent = failure.message; }
+            save.disabled = true;
+            try { await submit(read()); dialog.close(); } catch (failure) { error.textContent = failure.message; } finally { save.disabled = false; }
         });
         dialog.append(form); document.body.append(dialog);
         dialog.addEventListener('close', () => { dialog.remove(); if (activeKey) [...this.root.querySelectorAll('[data-focus]')].find(part => part.dataset.focus === activeKey)?.focus({ preventScroll: true }); });

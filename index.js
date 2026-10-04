@@ -1,4 +1,5 @@
 import { initDiceRequests } from './src/systems/features/diceRequests.js';
+import { initFrameworkRuntime } from './src/framework/runtime.js';
 import { initActionBridge } from './src/systems/features/actionBridge.js';
 import { mountBalancedLayout, unmountBalancedLayout, wantsBalancedLayout } from './src/systems/ui/balancedLayout.js';
 import { getContext, renderExtensionTemplateAsync, extension_settings as st_extension_settings } from '../../../extensions.js';
@@ -1315,6 +1316,7 @@ async function initUI() {
     }
     window.RPGCompanion.updateWeatherEffect = updateWeatherEffect;
     mountBalancedLayout();
+    initFrameworkRuntime();
 }
 
 

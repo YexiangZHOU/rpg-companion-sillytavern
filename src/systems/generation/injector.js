@@ -4,6 +4,7 @@
  */
 
 import { getContext } from '../../../../../../extensions.js';
+import { isUniversalFramework } from '../../framework/mode.js';
 import { extension_prompt_types, extension_prompt_roles, setExtensionPrompt, eventSource, event_types } from '../../../../../../../script.js';
 import {
     extensionSettings,
@@ -196,6 +197,7 @@ function buildHistoricalContextMap() {
  * Does NOT modify the original chat messages.
  */
 function prepareHistoricalContextInjection() {
+    if (isUniversalFramework()) { pendingContextMap = new Map(); return; }
     const historyPersistence = extensionSettings.historyPersistence;
     if (!historyPersistence || !historyPersistence.enabled) {
         pendingContextMap = new Map();
@@ -569,6 +571,11 @@ function onChatCompletionPromptReady(eventData) {
  * @param {boolean} dryRun - If true, this is a dry run (page reload, prompt preview, etc.) - skip all logic
  */
 export async function onGenerationStarted(type, data, dryRun) {
+    if (isUniversalFramework()) {
+        pendingContextMap = new Map();
+        for (const key of ['inject','example','html','dialogue-coloring','spotify','context','deception','omniscience','zzz-cyoa']) setExtensionPrompt('rpg-companion-' + key, '', extension_prompt_types.IN_CHAT, 0, false);
+        return;
+    }
     // Skip dry runs (page reload, prompt manager preview, etc.)
     if (dryRun) {
         // console.log('[RPG Companion] Skipping onGenerationStarted: dry run detected');
