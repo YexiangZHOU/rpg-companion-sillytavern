@@ -8,7 +8,8 @@ export async function saveFrameworkVerified(context, transport = fetch) {
     if (typeof context.saveChat !== 'function') throw Error('当前版本缺少聊天保存接口');
     const project = (messages, metadata) => ({
         mode: metadata?.[CHAT_FRAMEWORK_KEY]?.mode ?? null,
-        messages: messages.map(m => ({ reply: m.mes, swipe: m.swipe_id ?? 0, data: m.extra?.rpg_framework_swipes ?? m.swipe_info?.[m.swipe_id ?? 0]?.extra?.rpg_framework_swipes ?? null, portraits: m.extra?.rpg_framework_portraits ?? m.swipe_info?.[m.swipe_id ?? 0]?.extra?.rpg_framework_portraits ?? null })),
+        repairAttempts: metadata?.[CHAT_FRAMEWORK_KEY]?.repairAttempts ?? null,
+        messages: messages.map(m => ({ reply: m.mes, swipe: m.swipe_id ?? 0, data: m.extra?.rpg_framework_swipes ?? m.swipe_info?.[m.swipe_id ?? 0]?.extra?.rpg_framework_swipes ?? null, portraits: m.extra?.rpg_framework_portraits ?? m.swipe_info?.[m.swipe_id ?? 0]?.extra?.rpg_framework_portraits ?? null, repairs: m.extra?.rpg_framework_repairs ?? m.swipe_info?.[m.swipe_id ?? 0]?.extra?.rpg_framework_repairs ?? null })),
     });
     const expected = cloneFramework(project(context.chat,context.chatMetadata));
     const endpoint = context.groupId ? '/api/chats/group/get' : '/api/chats/get';

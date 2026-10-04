@@ -2,6 +2,7 @@ import { emptyFramework, cloneFramework, applyFrameworkTransaction } from './sta
 import { applyFrameworkReply, buildFrameworkInstructions } from './protocol.mjs';
 import { readFrameworkBranch, writeFrameworkSnapshot } from './snapshots.mjs';
 import { frameworkFailure } from './diagnostics.mjs';
+import { readRepair, writeRepair, repairable, repairPrompt, correctedResult } from './repair.mjs';
 
 export const CHAT_FRAMEWORK_KEY = 'rpg_framework_v1';
 export function frameworkMode(context) {
@@ -18,14 +19,17 @@ const snapFor = m => (m.extra?.rpg_framework_swipes ?? m.swipe_info?.[m.swipe_id
 
 /** Dependency-injected chat lifecycle: no ST globals and no account-wide game state. */
 export class FrameworkChat {
-    constructor({ getContext, save, enabled = () => true, render = () => {}, report = () => {}, observe = () => {} }) {
+    constructor({ getContext, save, enabled = () => true, render = () => {}, report = () => {}, observe = () => {}, generateRepair, repairLimit = () => 2, repairStatus = () => {} }) {
         Object.assign(this, { getContext, save, enabled, render, report }); this.generation = null; this.serial = 0;
+        Object.assign(this, { generateRepair, repairLimit }); this.repairJob = null;
+        this.uncertainSaves = new WeakSet();
+        this.repairStatus = () => { try { repairStatus(); } catch { /* Presentation cannot affect commit status. */ } };
         // Optional diagnostics must never change the transaction outcome.
         this.observe = (...args) => { try { observe(...args); } catch { /* Diagnostics are best effort. */ } };
     }
     active() { return this.enabled() && frameworkMode(this.getContext()) === 'universal'; }
     state() { return readFrameworkBranch(this.getContext().chat ?? []); }
-    restore() { this.generation = null; try { const state = this.state(); this.render(state); return state; } catch { this.report('保存的游戏数据校验失败，未覆盖记录'); this.render(null); return null; } }
+    restore() { this.cancelRepair(); this.generation = null; try { const state = this.state(); this.render(state); return state; } catch { this.report('保存的游戏数据校验失败，未覆盖记录'); this.render(null); return null; } }
     async setMode(mode) {
         if (this.saving) throw Error('数据正在保存，请稍后重试');
         if (!['universal', 'legacy'].includes(mode)) throw Error('跟踪模式无效');
@@ -37,6 +41,7 @@ export class FrameworkChat {
         this.restore();
     }
     begin(type, { suppressed = false, dryRun = false } = {}) {
+        this.cancelRepair();
         this.generation = null;
         if (!this.active() || dryRun || suppressed || ['quiet','impersonate','continue'].includes(type)) return '';
         const ctx = this.getContext(), messages = ctx.chat ?? [];
@@ -87,8 +92,103 @@ export class FrameworkChat {
             } finally { this.saving = false; }
             g.handled.add(message); this.render(result.state, { message, changes: result.changes }); return true;
         } catch (error) {
+            if (phase === 'save') this.uncertainSaves.add(message);
             this.observe(message, { ...(phase === 'save' ? { status: 'save_failed', code: 'save_readback' } : frameworkFailure(error)), baseRevision: before.revision });
+            if (phase === 'apply' && this.generateRepair && repairable(frameworkFailure(error))) {
+                g.handled.add(message);
+                return this.repair(message, before, error, g);
+            }
             this.report(phase === 'save' ? '保存或回读失败，服务器结果尚未确认；请查看诊断记录。' : `游戏数据未提交：${String(error.message).slice(0, 180)}`); return false;
+        }
+    }
+    cancelRepair() { if (this.repairJob) { this.repairJob.cancelled = true; this.repairStatus(); } }
+    async setRepairLimit(value) {
+        if (![0,1,2].includes(value) || this.saving) throw Error('当前无法更改纠错设置');
+        this.cancelRepair(); const ctx = this.getContext(), prior = cloneFramework(ctx.chatMetadata[CHAT_FRAMEWORK_KEY] ?? {});
+        ctx.chatMetadata[CHAT_FRAMEWORK_KEY] = { ...prior, repairAttempts: value };
+        this.saving = true;
+        try { await this.save(); } catch (error) { ctx.chatMetadata[CHAT_FRAMEWORK_KEY] = prior; throw error; } finally { this.saving = false; }
+    }
+    async retryRepair(message) {
+        if (!this.active() || this.saving || this.repairJob || this.uncertainSaves.has(message) || this.getContext().chat.at(-1) !== message || snapFor(message)?.reply === message?.mes) return false;
+        const ctx = this.getContext(), before = readFrameworkBranch(ctx.chat.slice(0,-1));
+        try { applyFrameworkReply(message.mes, before); return false; }
+        catch (error) {
+            if (!repairable(frameworkFailure(error))) return false;
+            return this.repair(message, before, error, null, true);
+        }
+    }
+    async repair(message, before, error, generation, manual = false) {
+        const ctx = this.getContext(), original = message.mes, swipe = message.swipe_id ?? 0;
+        const configured = this.repairLimit(), maximum = [0,1,2].includes(configured) ? configured : 2;
+        const limit = manual ? Math.max(1, maximum) : maximum;
+        if (!this.generateRepair || !limit || this.repairJob || original.length > 200000 || (!manual && readRepair(message))) {
+            this.report('本轮数据未提交；自动纠错已关闭、已尝试或暂不可用。'); return false;
+        }
+        const length = ctx.chat.length, prior = readRepair(message);
+        const job = { message, metadata: ctx.chatMetadata, cancelled: false };
+        this.repairJob = job;
+        const record = { version: 1, reply: original, original, status: 'pending', baseRevision: before.revision,
+            attempts: [], previousAttempts: (prior?.previousAttempts ?? 0) + (prior?.attempts?.length ?? 0), manual, failure: frameworkFailure(error) };
+        let rejected = original, failure = record.failure;
+        const valid = () => !job.cancelled && this.active() && this.getContext().chatMetadata === ctx.chatMetadata
+            && ctx.chat.length === length && ctx.chat.at(-1) === message && message.mes === original && (message.swipe_id ?? 0) === swipe
+            && !this.saving && JSON.stringify(this.state()) === JSON.stringify(before)
+            && (!generation || this.generation === generation);
+        const persist = async () => {
+            const extra = message.extra ? cloneFramework(message.extra) : undefined, info = message.swipe_info ? cloneFramework(message.swipe_info) : undefined;
+            this.saving = true; writeRepair(message, record);
+            try { await this.save(); }
+            catch (err) { if (extra === undefined) delete message.extra; else message.extra = extra; if (info === undefined) delete message.swipe_info; else message.swipe_info = info; throw err; }
+            finally { this.saving = false; }
+            this.repairStatus();
+        };
+        try {
+            for (let attempt = 1; attempt <= limit; attempt++) {
+                if (!valid()) return false;
+                record.status = 'requesting'; record.attempts.push({ attempt, status: 'requesting', failure });
+                // Persist the budget before any request. Reload cannot restart it.
+                await persist(); if (!valid()) return false;
+                let raw;
+                try { raw = await this.generateRepair(repairPrompt(before, original, rejected, failure, ctx.chat.slice(Math.max(0,length-5),-1).filter(m => !m.is_system))); }
+                catch { if (valid()) { record.status = 'request_failed'; record.attempts.at(-1).status = 'request_failed'; await persist(); } return false; }
+                if (!valid()) return false;
+                if (typeof raw !== 'string' || raw.length > 180000) { record.status = 'failed'; record.attempts.at(-1).status = 'output_limit'; await persist(); return false; }
+                record.attempts.at(-1).output = raw;
+                let result;
+                try { result = correctedResult(raw, before, original); }
+                catch (err) {
+                    failure = frameworkFailure(err); record.attempts.at(-1).failure = failure; record.attempts.at(-1).status = 'rejected';
+                    record.status = 'failed'; await persist();
+                    if (!repairable(failure) || raw === rejected) return false;
+                    rejected = raw; continue;
+                }
+                if (!valid()) return false;
+                const backup = cloneFramework(message);
+                record.status = 'corrected'; record.reply = result.visibleText; record.revision = result.state.revision;
+                record.attempts.at(-1).status = 'accepted';
+                this.saving = true;
+                try {
+                    message.mes = result.visibleText;
+                    if (message.swipes) message.swipes[swipe] = message.mes;
+                    writeFrameworkSnapshot(message, result.state); writeRepair(message, record);
+                    await this.save();
+                } catch (err) {
+                    for (const key of ['mes','swipes','extra','swipe_info']) { if (backup[key] === undefined) delete message[key]; else message[key] = backup[key]; }
+                    throw err;
+                } finally { this.saving = false; }
+                this.observe(message, { status: 'corrected', baseRevision: before.revision, revision: result.state.revision });
+                if (this.getContext().chatMetadata === ctx.chatMetadata) this.render(result.state, { message, changes: result.changes, repaired: true });
+                return true;
+            }
+            return false;
+        } catch {
+            this.uncertainSaves.add(message);
+            this.observe(message, { status: 'save_failed', code: 'repair_save_readback' });
+            this.report('纠错记录保存或回读失败，结果尚未确认；已停止重试。'); return false;
+        } finally {
+            if (this.repairJob === job) this.repairJob = null;
+            this.repairStatus();
         }
     }
     async manual(ops) {

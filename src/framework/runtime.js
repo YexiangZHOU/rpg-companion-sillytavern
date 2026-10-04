@@ -1,6 +1,6 @@
 /** SillyTavern boundary. Game definitions stay in the chat, never account settings. */
 import { getContext } from '../../../../../extensions.js';
-import { eventSource, event_types, setExtensionPrompt, extension_prompt_types, extension_prompt_roles, updateMessageBlock, is_send_press, user_avatar, getThumbnailUrl } from '../../../../../../script.js';
+import { eventSource, event_types, setExtensionPrompt, extension_prompt_types, extension_prompt_roles, updateMessageBlock, is_send_press, user_avatar, getThumbnailUrl, generateRaw } from '../../../../../../script.js';
 import { extensionSettings, incrementSeparateGenerationId } from '../core/state.js';
 import { i18n } from '../core/i18n.js';
 import { FrameworkChat, frameworkMode } from './chat.mjs';
@@ -18,6 +18,7 @@ import { preserveBalancedDice } from '../systems/ui/balancedLayout.js';
 import { protocolVisibleText } from '../systems/features/diceEngine.mjs';
 import { withAvatarJob } from '../systems/features/avatarQueue.mjs';
 import { FrameworkObservations, reviewFrameworkChat, frameworkDiagnosticLabel, frameworkSceneWarnings } from './diagnostics.mjs';
+import { readRepair } from './repair.mjs';
 
 let initialized = false, playerPanel, scenePanel, nativePanel, nativeModal, timer, observer, frame, panelContext;
 const portraitBusy = new WeakSet();
@@ -28,7 +29,36 @@ const text = (a,b) => zh() ? a : b;
 const save = () => saveFrameworkVerified(getContext());
 const observations = new FrameworkObservations();
 const report = message => { toastr.warning(message, text('通用 RPG 框架','Universal RPG framework')); const el = document.getElementById('rpg-framework-feedback'); if (el) el.textContent = message; };
-export const frameworkChat = new FrameworkChat({ getContext, save, enabled: () => !!extensionSettings.enabled, render: renderFramework, report, observe: (message, event) => { observations.record(message, event); renderDiagnostics(); } });
+export const frameworkChat = new FrameworkChat({ getContext, save, enabled: () => !!extensionSettings.enabled, render: renderFramework, report,
+    observe: (message, event) => { observations.record(message, event); renderDiagnostics(); },
+    // Call once directly; the generic wrapper can issue an unbudgeted fallback.
+    generateRepair: prompt => generateRaw({ prompt, quietToLoud: false, responseLength: 4096, trimNames: false }),
+    repairLimit: () => getContext().chatMetadata?.rpg_framework_v1?.repairAttempts ?? 2,
+    repairStatus: () => { renderRepairStatus(); renderDiagnostics(); },
+});
+
+function renderRepairStatus() {
+    const host = document.getElementById('rpg-framework-repair-status'); if (!host) return;
+    host.replaceChildren();
+    const ctx = getContext(), message = ctx.chat.at(-1), repair = readRepair(message);
+    const job = frameworkChat.repairJob;
+    if (job?.metadata === ctx.chatMetadata && job.message === message) {
+        host.append(node('small', '', text(job.cancelled ? '已停止后续纠错，正在丢弃过期结果。' : '正在后台修正面板数据…', job.cancelled ? 'Correction stopped; pending output will be discarded.' : 'Correcting panel data in the background…')));
+        const cancel = node('button', 'menu_button', text('停止纠错', 'Stop correction')); cancel.type = 'button'; cancel.disabled = job.cancelled;
+        cancel.addEventListener('click', () => frameworkChat.cancelRepair()); host.append(cancel); return;
+    }
+    if (!repair) return;
+    if (frameworkChat.uncertainSaves.has(message)) { host.append(node('small','',text('保存结果尚未确认；请重新加载聊天核实，暂不重复纠错。','Save status is uncertain. Reload the chat to verify before retrying.'))); return; }
+    host.append(node('small', '', repair.status === 'corrected'
+        ? text(`面板数据已自动修正 · ${repair.attempts.length} 次请求`, `Panel data corrected · ${repair.attempts.length} requests`)
+        : text('面板纠错未完成，仍使用之前的数据。', 'Correction incomplete; the previous data remains active.')));
+    if (repair.status !== 'corrected') {
+        const retry = node('button', 'menu_button', text('重新纠错', 'Retry correction')); retry.type = 'button';
+        retry.disabled = !!frameworkChat.repairJob || is_send_press;
+        retry.title = text('额外请求模型，最多两次；不会添加玩家发言。','Requests up to two additional model calls without a player message.');
+        retry.addEventListener('click', () => { if (!is_send_press) void frameworkChat.retryRepair(message); }); host.append(retry);
+    }
+}
 
 function renderDiagnostics() {
     const host = document.getElementById('rpg-framework-diagnostics');
@@ -49,6 +79,20 @@ function renderDiagnostics() {
         item.append(node('strong', '', `#${row.message} · ${frameworkDiagnosticLabel(row, zh())}`));
         const basis = row.basis === 'saved_snapshot' ? text('保存快照', 'Saved snapshot') : row.basis === 'observed_this_page' ? text('本页面现场记录（刷新即失）', 'Live observation (lost on reload)') : text('重新校验，非历史日志', 'Replay, not a historical log');
         item.append(node('small', '', `${basis}${row.code ? ` · ${row.code}` : ''}${row.revision != null ? ` · v${row.revision}` : ''}${row.at ? ` · ${row.at}` : ''}`));
+        if (row.operation) item.append(node('small', '', `${text('操作','Operation')} ${row.operation} · ${row.fieldId ?? ''} · ${row.fieldType ?? ''}`));
+        if (row.repair) {
+            item.append(node('small', '', `${text('后台纠错','Background correction')}: ${row.repair.status} · ${row.repair.attempts} ${text('次请求','requests')}`));
+            const record = readRepair(getContext().chat[row.message-1]);
+            const details = node('details',''); details.append(node('summary','',text('查看纠错记录（含本聊天原始数据）','Review correction record (includes private chat data)')));
+            details.append(node('pre','',JSON.stringify(record,null,2))); item.append(details);
+        }
+        if (row.message === getContext().chat.length && ['parse_rejected','validation_rejected'].includes(row.status)) {
+            const message = getContext().chat[row.message-1];
+            const retry = node('button','menu_button',text('后台修正此回复','Correct this reply in the background')); retry.type = 'button';
+            retry.disabled = is_send_press || !!frameworkChat.repairJob || frameworkChat.saving || frameworkChat.uncertainSaves.has(message);
+            retry.title = text('最多两次额外文字请求；保留剧情，不添加玩家发言。','Up to two extra text calls; keeps the story and adds no player message.');
+            retry.addEventListener('click',()=>{ if (!is_send_press) void frameworkChat.retryRepair(message); }); item.append(retry);
+        }
         if (row.warnings?.includes('multiple_active_scenes')) item.append(node('small', '', text('该记录含多个未归档场景；请核对当前地点。','This record contains multiple active scenes; check the current location.')));
         const locate = node('button', 'menu_button', text('定位回复', 'Locate reply')); locate.type = 'button';
         locate.addEventListener('click', () => {
@@ -95,6 +139,10 @@ function mount() {
         for (const [value,name] of [['universal',text('通用：模型定义分类','Universal: model-defined')],['legacy',text('兼容：原版记录','Legacy trackers')]]) { const o = node('option','',name); o.value = value; select.append(o); }
         select.addEventListener('change', async () => { select.disabled = true; try { incrementSeparateGenerationId(); await frameworkChat.setMode(select.value); await eventSource.emit(event_types.CHAT_LOADED); } catch { report(text('模式保存失败','Could not save mode')); } finally { select.disabled = false; } });
         label.append(select); controls.append(label);
+        const repairLabel = node('label','',text('后台自动纠错','Background correction')), repairSelect = node('select',''); repairSelect.id = 'rpg-framework-repair-limit';
+        for (const value of [0,1,2]) { const o = node('option','',value ? text(`最多 ${value} 次额外文字请求`,`Up to ${value} extra text requests`) : text('关闭','Off')); o.value = String(value); repairSelect.append(o); }
+        repairSelect.addEventListener('change', async () => { repairSelect.disabled = true; try { await frameworkChat.setRepairLimit(Number(repairSelect.value)); } catch { report(text('纠错设置保存失败','Could not save correction settings')); } finally { repairSelect.value = String(frameworkChat.repairLimit()); repairSelect.disabled = false; } });
+        repairLabel.append(repairSelect); controls.append(repairLabel);
         const feedback = node('small','',text('分类与初值由模型建立；旧记录保留。','The model creates categories and initial values. Legacy records are preserved.')); feedback.id = 'rpg-framework-feedback'; feedback.setAttribute('role','status'); controls.append(feedback); more.prepend(controls);
         const diagnostics = node('details', 'uf-diagnostics'); diagnostics.id = 'rpg-framework-diagnostics';
         diagnostics.append(node('summary', '', text('数据更新诊断', 'Data update diagnostics')), node('div', 'uf-diagnostics-body'));
@@ -106,6 +154,10 @@ function mount() {
     if (!scenePanel?.root.isConnected || scenePanel.root.parentElement !== sceneScroll) { scenePanel?.root.remove(); const root = node('section','rpg-framework-scene'); root.id = 'rpg-framework-scene'; sceneScroll.append(root); scenePanel = roster(root,'left'); }
     if (!document.getElementById('rpg-framework-scene-images')) { const images=node('section',''); images.id='rpg-framework-scene-images'; sceneScroll.prepend(images); }
     controls.querySelector('select').value = frameworkMode(getContext());
+    controls.querySelector('#rpg-framework-repair-limit').value = String(frameworkChat.repairLimit());
+    if (!document.getElementById('rpg-framework-repair-status')) {
+        const status = node('div','uf-repair-status'); status.id = 'rpg-framework-repair-status'; status.setAttribute('role','status'); playerPanel.root.before(status);
+    }
 }
 function renderFramework(state, info = {}) {
     if (panelContext !== getContext().chatMetadata) {
@@ -133,7 +185,7 @@ function renderFramework(state, info = {}) {
     if (info.message) {
         const index = getContext().chat.indexOf(info.message);
         if (index >= 0) updateMessageBlock(index, info.message);
-        const battle = state.entities.find(e => encounterEntity(e) && !e.archived);
+        const battle = !info.repaired && state.entities.find(e => encounterEntity(e) && !e.archived);
         if (battle && !frameworkChat.generation?.before.entities.some(e=>e.id===battle.id&&!e.archived)) {
             if (encounterMode() === 'auto') window.dispatchEvent(new Event('rpg-framework-open-encounter'));
             else if (encounterMode() === 'proposal') toastr.info(text('遭遇已记录，可打开原遭遇窗口查看与行动','Encounter recorded. Open the encounter window to act.'));
@@ -141,6 +193,7 @@ function renderFramework(state, info = {}) {
     }
     if (nativePanel && nativeModal?.modal.classList.contains('is-open')) renderFrameworkEncounter(nativeModal);
     renderDiagnostics();
+    renderRepairStatus();
 }
 function begin(type, data, dryRun) {
     const ctx = getContext();
@@ -156,19 +209,19 @@ async function receive(id) {
     const message=Number.isInteger(id) ? messages[id] : messages.at(-1);
     await frameworkChat.receive(message);
     renderActionMessages();
-    if (frameworkChat.active() && frameworkChat.generation?.handled.has(message)) await visualRequests(message);
+    if (frameworkChat.active() && !readRepair(message) && frameworkChat.generation?.handled.has(message)) await visualRequests(message);
 }
 function restore() { clearTimeout(timer); frameworkChat.restore(); }
 export function initFrameworkRuntime() {
     if (initialized) { renderFramework(frameworkChat.state()); return; } initialized = true;
     const style = node('link',''); style.rel = 'stylesheet'; style.href = new URL('./panel.css', import.meta.url).href; document.head.append(style);
     const integrationStyle = node('link',''); integrationStyle.rel = 'stylesheet'; integrationStyle.href = new URL('./runtime.css', import.meta.url).href; document.head.append(integrationStyle);
-    setDiceReplyHandler(async (message, records) => { if (frameworkChat.active()) { await frameworkChat.receive(message); if(frameworkChat.generation?.handled.has(message))await visualRequests(message); } else await processActionReply(message,records); });
+    setDiceReplyHandler(async (message, records) => { if (frameworkChat.active()) { await frameworkChat.receive(message); if(!readRepair(message) && frameworkChat.generation?.handled.has(message))await visualRequests(message); } else await processActionReply(message,records); });
     window.addEventListener('rpg-framework-open-encounter',()=>void encounterModal.open());
     eventSource.on(event_types.GENERATION_AFTER_COMMANDS,begin);
     eventSource.on(event_types.MESSAGE_RECEIVED,id => { if (!is_send_press) void receive(id); });
     eventSource.on(event_types.GENERATION_ENDED,() => { clearTimeout(timer); timer = setTimeout(() => void receive(), 0); });
-    eventSource.on(event_types.GENERATION_STOPPED,() => { frameworkChat.generation = null; });
+    eventSource.on(event_types.GENERATION_STOPPED,() => { frameworkChat.cancelRepair(); frameworkChat.generation = null; });
     for (const key of ['CHAT_CHANGED','CHAT_LOADED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_SWIPE_DELETED','MESSAGE_UPDATED']) if (event_types[key]) eventSource.on(event_types[key],() => {
         // ST deletes native tool placeholders during an active generation.
         if(is_send_press && ['MESSAGE_DELETED','MESSAGE_SWIPE_DELETED','MESSAGE_UPDATED'].includes(key) && frameworkChat.generation?.metadata===getContext().chatMetadata) return;

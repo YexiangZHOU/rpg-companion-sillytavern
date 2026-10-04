@@ -1,5 +1,6 @@
 import { emptyFramework, validateFramework, FrameworkError } from './state.mjs';
 import { applyFrameworkReply, FrameworkProtocolError } from './protocol.mjs';
+import { readRepair } from './repair.mjs';
 
 /** A review hint, never an inferred scene transition or a state mutation. */
 export function frameworkSceneWarnings(state) {
@@ -9,7 +10,9 @@ export function frameworkSceneWarnings(state) {
 /** Only fixed codes enter diagnostics; provider errors, prompts and credentials do not. */
 export function frameworkFailure(error) {
     if (error instanceof FrameworkProtocolError) return { status: 'parse_rejected', code: error.code };
-    if (error instanceof FrameworkError) return { status: 'validation_rejected', code: error.code };
+    if (error instanceof FrameworkError) return { status: 'validation_rejected', code: error.code,
+        ...(Number.isInteger(error.operation) ? { operation: error.operation } : {}),
+        ...(error.fieldId ? { fieldId: error.fieldId, fieldType: error.fieldType } : {}) };
     return { status: 'internal_error', code: 'unexpected' };
 }
 
@@ -51,6 +54,10 @@ export function reviewFrameworkChat(messages, observations, limit = 100) {
                 Object.assign(row, { status: result.accepted ? 'valid_uncommitted' : 'no_protocol', ...result.diagnostic, basis: 'replay', warnings: frameworkSceneWarnings(result.state) });
             } catch (error) { Object.assign(row, frameworkFailure(error), { basis: 'replay' }); }
         }
+        const repair = readRepair(message);
+        if (repair) row.repair = { status: repair.status, attempts: repair.attempts?.length ?? 0,
+            previousAttempts: repair.previousAttempts ?? 0, failure: repair.failure,
+            results: repair.attempts?.map(a => ({ attempt: a.attempt, status: a.status, failure: a.failure })) };
         rows.push(row);
     }
     return { version: 1, scope: 'current_selected_swipes', total: rows.length, truncated: rows.length > limit, rows: rows.slice(-limit) };
@@ -58,7 +65,7 @@ export function reviewFrameworkChat(messages, observations, limit = 100) {
 
 export function frameworkDiagnosticLabel(row, zh = true) {
     const labels = {
-        snapshot: ['已有保存快照', 'Saved snapshot'], accepted: ['保存并回读通过', 'Saved and verified'],
+        snapshot: ['已有保存快照', 'Saved snapshot'], accepted: ['保存并回读通过', 'Saved and verified'], corrected: ['后台纠错已保存', 'Background correction saved'],
         no_protocol: ['本轮未提交框架数据（可能没有变化）', 'No framework data (possibly no change)'],
         ignored_protocol: ['框架标签位于示例、引用或代码块，未执行', 'Framework tags in an example, quote or code block; not executed'],
         parse_rejected: ['协议 / JSON 解析失败', 'Protocol / JSON parse failed'], validation_rejected: ['数据校验拒绝', 'Data validation rejected'],

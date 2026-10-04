@@ -208,7 +208,8 @@ export function applyFrameworkTransaction(previous, raw, { actor = 'model' } = {
     }
     if (raw.baseRevision !== previous.revision) fail('conflict', '状态已变化，请基于最新记录重新更新');
     const state = cloneFramework(previous), changes = [];
-    for (const op of raw.ops) {
+    for (const [operationIndex, op] of raw.ops.entries()) {
+        try {
         if (!object(op)) fail('operation', '更新操作不合法');
         if (op.op === 'init') {
             keys(op, ['op', 'title', 'entities', 'groups', 'fields', 'values']);
@@ -300,6 +301,15 @@ export function applyFrameworkTransaction(previous, raw, { actor = 'model' } = {
             }
             if (canonical(before) !== canonical(state.values[field.id])) changes.push({ kind: 'value', fieldId: field.id, label: field.label, before, after: cloneFramework(state.values[field.id]) });
         } else fail('operation', '更新操作不支持');
+        } catch (error) {
+            if (error instanceof FrameworkError) {
+                const safeId = value => typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(value) ? value : undefined;
+                error.operation = operationIndex + 1;
+                error.fieldId = safeId(op?.fieldId);
+                error.fieldType = state.fields.find(field => field.id === error.fieldId)?.type;
+            }
+            throw error;
+        }
     }
     state.revision += 1;
     state.applied = [...state.applied, { id: raw.id, payload }].slice(-32);
