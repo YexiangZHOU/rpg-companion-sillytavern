@@ -37,3 +37,7 @@ All jobs reuse the native `/sd` or `/imagine` command and the shared avatar queu
 Generated images, fixed failure codes and fingerprints live separately in message/swipe metadata. Existing entity images and locks remain readable. New images require the local native image URL form. Locks, target archival, chat/swipe/reply changes, new turns, appearance changes and cancellation prevent stale results from being attached. A failed refresh retains the old image with failure/staleness status. Stop discards a pending result and subsequent jobs; an already issued provider request can still incur a charge and leave a native image file. The extension does not delete native image files automatically.
 
 Save failures stop the job and require reload/verification before retrying on that message. Historical messages, shared account settings and game values are not silently migrated on load. Item/field icons are compact and their full images open in a dialog. No online provider behavior is established by synthetic tests.
+
+## Scene entity illustrations (3.7.14)
+
+Generated images for `kind:scene` entities appear directly in their scene cards, with a responsive width and preserved proportions. The existing View, Refresh and Lock controls remain available. These place illustrations are separate from the dynamic scene image, which depicts the current action and uses its own metadata and mode. Rendering a stored image never issues a new drawing request.

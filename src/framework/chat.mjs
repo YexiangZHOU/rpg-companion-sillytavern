@@ -20,9 +20,9 @@ const snapFor = m => (m.extra?.rpg_framework_swipes ?? m.swipe_info?.[m.swipe_id
 
 /** Dependency-injected chat lifecycle: no ST globals and no account-wide game state. */
 export class FrameworkChat {
-    constructor({ getContext, save, enabled = () => true, render = () => {}, report = () => {}, observe = () => {}, generateRepair, repairLimit = () => 2, repairStatus = () => {} }) {
+    constructor({ getContext, save, enabled = () => true, render = () => {}, report = () => {}, observe = () => {}, generateRepair, repairLimit = () => 2, sceneReviewMode = () => 'noop', repairStatus = () => {} }) {
         Object.assign(this, { getContext, save, enabled, render, report }); this.generation = null; this.serial = 0;
-        Object.assign(this, { generateRepair, repairLimit }); this.repairJob = null;
+        Object.assign(this, { generateRepair, repairLimit, sceneReviewMode }); this.repairJob = null;
         this.uncertainSaves = new WeakSet();
         this.repairStatus = () => { try { repairStatus(); } catch { /* Presentation cannot affect commit status. */ } };
         // Optional diagnostics must never change the transaction outcome.
@@ -93,7 +93,13 @@ export class FrameworkChat {
                 if (priorMode === undefined) delete ctx.chatMetadata[CHAT_FRAMEWORK_KEY]; else ctx.chatMetadata[CHAT_FRAMEWORK_KEY] = priorMode;
                 throw error;
             } finally { this.saving = false; }
-            g.handled.add(message); this.render(result.state, { message, changes: result.changes }); return true;
+            g.handled.add(message); this.render(result.state, { message, changes: result.changes });
+            if (this.sceneReviewMode() === 'all' || this.sceneReviewMode() === 'noop' && !result.transaction.ops.length) {
+                // A valid receipt only proves syntax. Review public scene/cast
+                // separately, using at most one call within the correction cap.
+                await this.reviewScene(message, false, g);
+            }
+            return true;
         } catch (error) {
             if (phase === 'save') this.uncertainSaves.add(message);
             this.observe(message, { ...(phase === 'save' ? { status: 'save_failed', code: 'save_readback' } : frameworkFailure(error)), baseRevision: before.revision });
@@ -118,6 +124,19 @@ export class FrameworkChat {
         ctx.chatMetadata[CHAT_FRAMEWORK_KEY]={...(prior??{}),mode:frameworkMode(ctx),mediaMode:value};this.saving=true;
         try{await this.save();}catch(error){if(prior===undefined)delete ctx.chatMetadata[CHAT_FRAMEWORK_KEY];else ctx.chatMetadata[CHAT_FRAMEWORK_KEY]=prior;throw error;}finally{this.saving=false;}
         this.render(this.state());
+    }
+    async setSceneReviewMode(value) {
+        if (!['off','noop','all'].includes(value) || this.saving) throw Error('当前无法更改复核设置');
+        this.cancelRepair(); const ctx=this.getContext(),prior=ctx.chatMetadata[CHAT_FRAMEWORK_KEY];
+        ctx.chatMetadata[CHAT_FRAMEWORK_KEY]={...(prior??{}),mode:frameworkMode(ctx),sceneReviewMode:value};this.saving=true;
+        try { await this.save(); } catch(error) { if(prior===undefined)delete ctx.chatMetadata[CHAT_FRAMEWORK_KEY];else ctx.chatMetadata[CHAT_FRAMEWORK_KEY]=prior;throw error; } finally { this.saving=false; }
+        this.render(this.state());
+    }
+    async reviewScene(message = this.getContext().chat.at(-1), manual = true, generation = null) {
+        if (!this.active() || !validReply(message) || this.getContext().chat.at(-1)!==message || this.saving || this.repairJob
+            || this.uncertainSaves.has(message) || snapFor(message)?.reply!==message.mes || !this.generateRepair) return false;
+        if (!manual && (!this.repairLimit() || readRepair(message))) return false;
+        return this.repair(message,this.state(),null,generation,manual,{purpose:'review'});
     }
     async completeMissing() {
         const ctx=this.getContext(),message=ctx.chat.at(-1),before=this.state(),missing=coverageIssues(before);
@@ -144,7 +163,9 @@ export class FrameworkChat {
     async repair(message, before, error, generation, manual = false, completion = null) {
         const ctx = this.getContext(), original = message.mes, swipe = message.swipe_id ?? 0;
         const configured = this.repairLimit(), maximum = [0,1,2].includes(configured) ? configured : 2;
-        const limit = completion ? 1 : manual ? Math.max(1, maximum) : maximum;
+        const review = completion?.purpose === 'review';
+        const completionMode = review ? 'review' : !!completion;
+        const limit = completion ? (manual ? 1 : Math.min(1,maximum)) : manual ? Math.max(1, maximum) : maximum;
         if (!this.generateRepair || !limit || this.repairJob || original.length > 200000 || (!manual && readRepair(message))) {
             this.report('本轮数据未提交；自动纠错已关闭、已尝试或暂不可用。'); return false;
         }
@@ -153,7 +174,7 @@ export class FrameworkChat {
         this.repairJob = job;
         const record = { version: 1, reply: original, original, status: 'pending', baseRevision: before.revision,
             attempts: [], previousAttempts: (prior?.previousAttempts ?? 0) + (prior?.attempts?.length ?? 0), manual,
-            purpose: completion ? 'coverage' : 'correction', failure: completion ? {status:'incomplete',code:'coverage',missing:completion.missing} : frameworkFailure(error) };
+            purpose: review ? 'review' : completion ? 'coverage' : 'correction', failure: review ? {status:'review_requested',code:'scene_review'} : completion ? {status:'incomplete',code:'coverage',missing:completion.missing} : frameworkFailure(error) };
         let rejected = original, failure = record.failure;
         const valid = () => !job.cancelled && this.active() && this.getContext().chatMetadata === ctx.chatMetadata
             && ctx.chat.length === length && ctx.chat.at(-1) === message && message.mes === original && (message.swipe_id ?? 0) === swipe
@@ -174,13 +195,13 @@ export class FrameworkChat {
                 // Persist the budget before any request. Reload cannot restart it.
                 await persist(); if (!valid()) return false;
                 let raw;
-                try { raw = await this.generateRepair(repairPrompt(before, original, rejected, failure, ctx.chat.slice(Math.max(0,length-5),-1).filter(m => !m.is_system), !!completion)); }
+                try { raw = await this.generateRepair(repairPrompt(before, original, rejected, failure, ctx.chat.slice(Math.max(0,length-5),-1).filter(m => !m.is_system), completionMode)); }
                 catch { if (valid()) { record.status = 'request_failed'; record.attempts.at(-1).status = 'request_failed'; await persist(); } return false; }
                 if (!valid()) return false;
                 if (typeof raw !== 'string' || raw.length > 180000) { record.status = 'failed'; record.attempts.at(-1).status = 'output_limit'; await persist(); return false; }
                 record.attempts.at(-1).output = raw;
                 let result;
-                try { result = correctedResult(raw, before, original, !!completion); }
+                try { result = correctedResult(raw, before, original, completionMode); }
                 catch (err) {
                     failure = frameworkFailure(err); record.attempts.at(-1).failure = failure; record.attempts.at(-1).status = 'rejected';
                     record.status = 'failed'; await persist();
@@ -189,7 +210,9 @@ export class FrameworkChat {
                 }
                 if (!valid()) return false;
                 const backup = cloneFramework(message);
-                record.status = 'corrected'; record.reply = result.visibleText; record.revision = result.state.revision;
+                const checked = review && !result.transaction.ops.length;
+                if (checked) result.state = before; // A semantic check alone does not add a game revision.
+                record.status = checked ? 'checked' : 'corrected'; record.reply = result.visibleText; record.revision = result.state.revision;
                 record.attempts.at(-1).status = 'accepted';
                 this.saving = true;
                 try {
@@ -201,7 +224,7 @@ export class FrameworkChat {
                     for (const key of ['mes','swipes','extra','swipe_info']) { if (backup[key] === undefined) delete message[key]; else message[key] = backup[key]; }
                     throw err;
                 } finally { this.saving = false; }
-                this.observe(message, { status: 'corrected', baseRevision: before.revision, revision: result.state.revision });
+                this.observe(message, { status: checked ? 'checked' : 'corrected', baseRevision: before.revision, revision: result.state.revision });
                 if (this.getContext().chatMetadata === ctx.chatMetadata) this.render(result.state, { message, changes: result.changes, repaired: true });
                 return true;
             }

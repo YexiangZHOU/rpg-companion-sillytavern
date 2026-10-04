@@ -19,7 +19,7 @@ function harness(generate = async()=>wrap(good), limit=2) {
     let ctx={chat:[opening,{mes:'I accept the restraints.',is_user:true}],chatMetadata:{rpg_framework_v1:{mode:'universal'}},draft:'Untouched draft'};
     const requests=[],saved=[],errors=[],observed=[]; let failSave=false;
     const controller = new FrameworkChat({getContext:()=>ctx,save:async()=>{if(failSave)throw Error('PRIVATE save error');saved.push(structuredClone(ctx));},
-        generateRepair:async prompt=>{requests.push(prompt);return generate(prompt);},repairLimit:()=>limit,report:e=>errors.push(e),observe:(m,e)=>observed.push(e)});
+        generateRepair:async prompt=>{requests.push(prompt);return generate(prompt);},repairLimit:()=>limit,sceneReviewMode:()=> 'off',report:e=>errors.push(e),observe:(m,e)=>observed.push(e)});
     controller.begin('normal'); const reply=msg('The pilot enters the room.\n'+wrap(bad));ctx.chat.push(reply);
     return {controller,reply,requests,saved,errors,observed,get ctx(){return ctx;},set ctx(v){ctx=v;},set failSave(v){failSave=v;}};
 }
@@ -86,7 +86,7 @@ test('disabled automatic omission correction sends zero calls and permits explic
     assert.equal(await h.controller.retryRepair(h.reply),true);assert.equal(h.requests.length,1);
 });
 
-test('explicit no-change receipt does not call correction and respects revision/replay rules',async()=>{
+test('explicit no-change receipt with review disabled respects revision/replay rules without extra calls',async()=>{
     const h=harness();h.reply.mes='Nothing changed.\n'+wrap(tx([],'checked'));
     assert.equal(await h.controller.receive(h.reply),true);assert.equal(h.requests.length,0);
     assert.equal(h.controller.state().revision,2);assert.equal(h.reply.mes,'Nothing changed.');

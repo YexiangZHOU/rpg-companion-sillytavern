@@ -34,6 +34,7 @@ export const frameworkChat = new FrameworkChat({ getContext, save, enabled: () =
     // Call once directly; the generic wrapper can issue an unbudgeted fallback.
     generateRepair: prompt => generateRaw({ prompt, quietToLoud: false, responseLength: 4096, trimNames: false }),
     repairLimit: () => getContext().chatMetadata?.rpg_framework_v1?.repairAttempts ?? 2,
+    sceneReviewMode: () => getContext().chatMetadata?.rpg_framework_v1?.sceneReviewMode ?? 'noop',
     repairStatus: () => { if(playerPanel)renderFramework(frameworkChat.state());else {renderRepairStatus();renderDiagnostics();} },
 });
 
@@ -43,20 +44,20 @@ function renderRepairStatus() {
     const ctx = getContext(), message = ctx.chat.at(-1), repair = readRepair(message);
     const job = frameworkChat.repairJob;
     if (job?.metadata === ctx.chatMetadata && job.message === message) {
-        host.append(node('small', '', text(job.cancelled ? '已停止后续纠错，正在丢弃过期结果。' : '正在后台修正面板数据…', job.cancelled ? 'Correction stopped; pending output will be discarded.' : 'Correcting panel data in the background…')));
+        host.append(node('small', '', text(job.cancelled ? '已停止后续请求，正在丢弃过期结果。' : readRepair(message)?.purpose === 'review' ? '正在后台复核场景与角色…' : '正在后台修正面板数据…', job.cancelled ? 'Stopped; pending output will be discarded.' : readRepair(message)?.purpose === 'review' ? 'Reviewing scene and characters…' : 'Correcting panel data in the background…')));
         const cancel = node('button', 'menu_button', text('停止纠错', 'Stop correction')); cancel.type = 'button'; cancel.disabled = job.cancelled;
         cancel.addEventListener('click', () => frameworkChat.cancelRepair()); host.append(cancel); return;
     }
     if (!repair) return;
     if (frameworkChat.uncertainSaves.has(message)) { host.append(node('small','',text('保存结果尚未确认；请重新加载聊天核实，暂不重复纠错。','Save status is uncertain. Reload the chat to verify before retrying.'))); return; }
-    host.append(node('small', '', repair.status === 'corrected'
-        ? repair.purpose==='coverage' ? text('补齐提交已保存；请查看是否还有缺项。','Completion saved; check for any remaining gaps.') : text(`面板数据已自动修正 · ${repair.attempts.length} 次请求`, `Panel data corrected · ${repair.attempts.length} requests`)
+    host.append(node('small', '', repair.status === 'checked' ? text('本轮场景与角色已复核，模型未报告额外变化。','Scene and characters checked; the model reported no additional changes.') : repair.status === 'corrected'
+        ? repair.purpose==='review' ? text('场景与角色补充已保存；可在诊断中审查。','Scene and character additions saved; review them in diagnostics.') : repair.purpose==='coverage' ? text('补齐提交已保存；请查看是否还有缺项。','Completion saved; check for any remaining gaps.') : text(`面板数据已自动修正 · ${repair.attempts.length} 次请求`, `Panel data corrected · ${repair.attempts.length} requests`)
         : text('面板纠错或补齐未完成，仍使用之前的数据。', 'Correction or completion incomplete; the previous data remains active.')));
-    if (repair.status !== 'corrected') {
+    if (!['corrected','checked'].includes(repair.status)) {
         const retry = node('button', 'menu_button', text('重新纠错', 'Retry correction')); retry.type = 'button';
         retry.disabled = !!frameworkChat.repairJob || is_send_press;
         retry.title = text('额外请求模型，最多两次；不会添加玩家发言。','Requests up to two additional model calls without a player message.');
-        retry.addEventListener('click', () => { if (!is_send_press) void (repair.purpose==='coverage'?frameworkChat.completeMissing():frameworkChat.retryRepair(message)); }); host.append(retry);
+        retry.addEventListener('click', () => { if (!is_send_press) void (repair.purpose==='review'?frameworkChat.reviewScene():repair.purpose==='coverage'?frameworkChat.completeMissing():frameworkChat.retryRepair(message)); }); host.append(retry);
     }
 }
 
@@ -215,6 +216,12 @@ function mount() {
         for (const value of [0,1,2]) { const o = node('option','',value ? text(`最多 ${value} 次额外文字请求`,`Up to ${value} extra text requests`) : text('关闭','Off')); o.value = String(value); repairSelect.append(o); }
         repairSelect.addEventListener('change', () => changePreference(async () => { try { await frameworkChat.setRepairLimit(Number(repairSelect.value)); } finally { repairSelect.value = String(frameworkChat.repairLimit()); } }, text('纠错设置保存失败','Could not save correction settings')));
         repairLabel.append(repairSelect); controls.append(repairLabel);
+        const reviewLabel=node('label','',text('场景与角色复核','Scene and character review')),reviewSelect=node('select','');reviewSelect.id='rpg-framework-scene-review';
+        for(const [value,cn,en] of [['noop','无变化回执后复核','Review no-change receipts'],['all','每轮复核','Review every reply'],['off','关闭自动复核','No automatic review']]){const o=node('option','',text(cn,en));o.value=value;reviewSelect.append(o);}
+        reviewSelect.addEventListener('change',()=>changePreference(()=>frameworkChat.setSceneReviewMode(reviewSelect.value),text('复核设置保存失败','Could not save review settings')));
+        reviewLabel.append(reviewSelect);controls.append(reviewLabel,node('small','',text('复核最多额外1次文字请求，受自动纠错开关限制；不改资金、物品或玩家资产。','Review uses at most one extra text call and respects the correction switch; it cannot change money, items or player assets.')));
+        const reviewButton=node('button','menu_button',text('复核本轮场景与角色（1次文字请求）','Review this scene and cast (1 text call)'));reviewButton.id='rpg-framework-review-now';reviewButton.type='button';
+        reviewButton.addEventListener('click',async()=>{reviewButton.disabled=true;try{await frameworkChat.reviewScene();}finally{renderFramework(frameworkChat.state());}});controls.append(reviewButton);
         const mediaLabel=node('label','',text('本聊天头像与图标','Chat portraits and icons')),mediaSelect=node('select','');mediaSelect.id='rpg-framework-media-mode';
         for(const [value,cn,en] of [['manual','手动生成','Manual'],['proposal','列出提议，点击生成','Propose; click to generate'],['auto','自动（每轮最多两张）','Automatic (up to two per turn)'],['off','关闭生成','Disabled']]){const o=node('option','',text(cn,en));o.value=value;mediaSelect.append(o);}
         mediaSelect.addEventListener('change', () => changePreference(async () => { try { frameworkMedia.cancel(); await frameworkChat.setMediaMode(mediaSelect.value); } finally { mediaSelect.value = portraitMode(); } }, text('配图设置保存失败','Could not save media settings')));
@@ -233,6 +240,8 @@ function mount() {
     controls.querySelector('select').value = frameworkMode(getContext());
     controls.querySelector('#rpg-framework-media-mode').value = portraitMode();
     controls.querySelector('#rpg-framework-repair-limit').value = String(frameworkChat.repairLimit());
+    controls.querySelector('#rpg-framework-scene-review').value = frameworkChat.sceneReviewMode();
+    controls.querySelector('#rpg-framework-review-now').disabled = !!(is_send_press||frameworkChat.saving||frameworkChat.repairJob||frameworkMedia.job||frameworkChat.uncertainSaves.has(getContext().chat.at(-1))||!getContext().chat.at(-1)?.extra?.rpg_framework_swipes);
     if (!document.getElementById('rpg-framework-repair-status')) {
         const status = node('div','uf-repair-status'); status.id = 'rpg-framework-repair-status'; status.setAttribute('role','status'); playerPanel.root.before(status);
     }

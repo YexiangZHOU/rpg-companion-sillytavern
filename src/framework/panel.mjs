@@ -158,6 +158,14 @@ export class FrameworkPanel {
         // Public description stays above appearance; it is not an inferred thought.
         if (entity.description) header.append(node('p', 'uf-description uf-entity-description', entity.description));
         this.root.append(header);
+        // A place portrait is an illustration, not a face in the identity row.
+        if (entity.kind === 'scene' && entity.visual?.mode !== 'none') {
+            const url = this.getPortrait?.(entity);
+            if (url) {
+                const image = node('img', 'uf-scene-illustration'); image.src = url; image.alt = entity.label;
+                image.addEventListener('error', () => image.remove(), { once: true }); this.root.append(image);
+            }
+        }
         const groups = activeFrameworkGroups(state, entity.id);
         const appearance = groups.flatMap(g => activeFrameworkFields(state, g.id)).filter(appearanceField);
         if (appearance.length) { const section = node('div', 'uf-appearance'); for (const field of appearance) section.append(this.fieldView(field)); this.root.append(section); }

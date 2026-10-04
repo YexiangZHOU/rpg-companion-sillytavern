@@ -56,7 +56,7 @@ export function reviewFrameworkChat(messages, observations, limit = 100) {
             } catch (error) { Object.assign(row, frameworkFailure(error), { basis: 'replay' }); }
         }
         const repair = readRepair(message);
-        if (repair) row.repair = { status: repair.status, attempts: repair.attempts?.length ?? 0,
+        if (repair) row.repair = { purpose: repair.purpose, status: repair.status, attempts: repair.attempts?.length ?? 0,
             previousAttempts: repair.previousAttempts ?? 0, failure: repair.failure,
             results: repair.attempts?.map(a => ({ attempt: a.attempt, status: a.status, failure: a.failure })) };
         rows.push(row);
@@ -66,7 +66,7 @@ export function reviewFrameworkChat(messages, observations, limit = 100) {
 
 export function frameworkDiagnosticLabel(row, zh = true) {
     const labels = {
-        snapshot: ['已有保存快照', 'Saved snapshot'], accepted: ['保存并回读通过', 'Saved and verified'], corrected: ['后台纠错已保存', 'Background correction saved'],
+        snapshot: ['已有保存快照', 'Saved snapshot'], accepted: ['保存并回读通过', 'Saved and verified'], corrected: ['后台纠错已保存', 'Background correction saved'], checked: ['场景与角色复核通过', 'Scene and character review completed'],
         no_protocol: ['没有数据回执，未核验是否需要更新', 'No data receipt; required changes have not been checked'],
         missing_protocol: ['模型漏交数据回执，尚未确认本轮变化', 'Model omitted its data receipt; changes are unconfirmed'],
         ignored_protocol: ['框架标签位于示例、引用或代码块，未执行', 'Framework tags in an example, quote or code block; not executed'],
