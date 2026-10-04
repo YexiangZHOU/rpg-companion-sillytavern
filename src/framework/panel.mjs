@@ -29,10 +29,25 @@ export function gameSummaryFields(state, entity, appearance = []) {
 }
 
 export class FrameworkPanel {
-    constructor(root, { onOperation, language = 'zh', getPortrait, presentation = 'editor', onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia } = {}) {
-        Object.assign(this, { root, onOperation, getPortrait, presentation, onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia }); this.strings = panelStrings[language] ?? panelStrings.zh;
+    constructor(root, { onOperation, language = 'zh', getPortrait, presentation = 'editor', onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia, onReview, reviewDisabled } = {}) {
+        Object.assign(this, { root, onOperation, getPortrait, presentation, onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia, onReview, reviewDisabled }); this.strings = panelStrings[language] ?? panelStrings.zh;
         this.entityId = null; this.selected = new Map(); this.opened = new Map(); this.scrollPositions = new Map(); this.renderedGroup = null; this.serial = 0;
         root.classList.add('uf-panel');
+    }
+    reviewButton(scope, label) {
+        if (!this.onReview) return document.createDocumentFragment();
+        const zh=this.strings===panelStrings.zh;
+        const control=button(zh?'核验':'Check',async event=>{
+            event.preventDefault();event.stopPropagation();
+            if(this.reviewDisabled?.())return;
+            control.disabled=true;
+            try { await this.onReview(scope); } finally { control.disabled=!!this.reviewDisabled?.(); }
+        },'uf-subtle uf-review');
+        control.disabled=!!this.reviewDisabled?.();
+        control.title=zh?`后台核验 ${label}（1次文字请求，不添加发言）`:`Check ${label} in the background (1 text call, no chat message)`;
+        control.setAttribute('aria-label',(zh?'后台核验 ':'Check ')+label);
+        control.dataset.focus=`review_${scope.target}_${scope.id??'all'}_${scope.itemId??''}`;
+        return control;
     }
     format(value) {
         const t = this.strings;
@@ -81,6 +96,7 @@ export class FrameworkPanel {
             label.append(select); names.append(label);
         }
         identity.append(portrait, names); header.append(identity);
+        if(entity)names.append(this.reviewButton({target:'entity',id:entity.id},entity.label));
         if(entity?.description){const detail=this.details(`entity_${entity.id}`,t.description);detail.dataset.detail=`entity_${entity.id}`;detail.append(node('p','',entity.description));header.append(detail);}
         const groups = activeFrameworkGroups(state, this.entityId);
         const allFields = groups.flatMap(group => activeFrameworkFields(state, group.id));
@@ -102,7 +118,7 @@ export class FrameworkPanel {
         if (group) {
             content.setAttribute('aria-label', group.label);
             const title = node('div', 'uf-group-heading'); title.append(node('h3', '', group.label));
-            title.append(button(t.rename, () => this.renameGroup(group), 'uf-subtle'));
+            title.append(button(t.rename, () => this.renameGroup(group), 'uf-subtle'),this.reviewButton({target:'group',id:group.id},group.label));
             content.append(title);
             if (group.description) content.append(node('p', 'uf-description', group.description));
             const toolbar = node('div', 'uf-locks');
@@ -144,7 +160,7 @@ export class FrameworkPanel {
         const names = node('div', 'uf-names'); names.append(node('h2', '', entity.label));
         const actions = node('div', 'uf-entity-actions');
         const editing = button(zh ? '编辑' : 'Edit', () => { this.editing = !this.editing; this.render(this.state); }, 'uf-subtle');
-        editing.dataset.focus = `edit_${entity.id}`; editing.setAttribute('aria-pressed', String(!!this.editing)); actions.append(editing);
+        editing.dataset.focus = `edit_${entity.id}`; editing.setAttribute('aria-pressed', String(!!this.editing)); actions.append(editing,this.reviewButton({target:'entity',id:entity.id},entity.label));
         if (this.onPortrait && !this.renderMedia && entity.kind !== 'scene' && entity.kind !== 'encounter') {
             actions.append(button(zh ? '生成头像' : 'Portrait', () => this.onPortrait(entity.id), 'uf-subtle'));
             if (this.hasGeneratedPortrait?.(entity.id)) {
@@ -188,6 +204,7 @@ export class FrameworkPanel {
             if (!fields.length && !this.editing) continue;
             const section = this.details(`game_group_${group.id}`, group.label); section.classList.add('uf-group'); section.dataset.detail = `game_group_${group.id}`;
             this.renderMedia?.(section.querySelector('summary'), `group:${group.id}`);
+            section.querySelector('summary').append(this.reviewButton({target:'group',id:group.id},group.label));
             section.open = this.opened.get(section.dataset.detail) ?? (visibleGroups === 0 || entity.kind === 'npc' || entity.kind === 'scene');
             visibleGroups++;
             if (group.description) section.append(node('p', 'uf-description', group.description));
@@ -208,6 +225,7 @@ export class FrameworkPanel {
         const t = this.strings, value = this.state.values[field.id] ?? null;
         const wrapper = node('div', `uf-field uf-type-${field.type}${compact ? ' is-summary' : ''}`);
         const label = node('div', 'uf-field-label', field.label);
+        label.append(this.reviewButton({target:'field',id:field.id},field.label));
         this.renderMedia?.(label, `field:${field.id}`);
         if (isFrameworkLocked(this.state, 'field', field.id, 'value')) { const lock = node('span', 'uf-lock-indicator', '●'); lock.title = t.lockedHint; label.append(lock); }
         wrapper.append(label);
@@ -217,6 +235,7 @@ export class FrameworkPanel {
                 const first = field.columns[0];
                 const detail = this.details(`item_${field.id}_${item.id}`, this.format(item.values[first.id])); detail.dataset.detail = `item_${field.id}_${item.id}`;
                 this.renderMedia?.(detail.querySelector('summary'), `item:${field.id}:${item.id}`);
+                detail.querySelector('summary').append(this.reviewButton({target:'item',id:field.id,itemId:item.id},this.format(item.values[first.id])));
                 const cells = node('dl', 'uf-item-values');
                 for (const column of field.columns) { cells.append(node('dt', '', column.label), node('dd', '', this.format(item.values[column.id]) + (column.unit ? ` ${column.unit}` : ''))); }
                 detail.append(cells, button(t.edit, () => this.editItem(field, item), 'uf-subtle'));

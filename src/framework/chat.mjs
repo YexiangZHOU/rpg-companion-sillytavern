@@ -4,6 +4,7 @@ import { readFrameworkBranch, writeFrameworkSnapshot } from './snapshots.mjs';
 import { frameworkFailure } from './diagnostics.mjs';
 import { readRepair, writeRepair, repairable, repairPrompt, correctedResult } from './repair.mjs';
 import { coverageIssues } from './media.mjs';
+import { panelReviewScope } from './panelReview.mjs';
 
 export const CHAT_FRAMEWORK_KEY = 'rpg_framework_v1';
 export function frameworkMode(context) {
@@ -138,6 +139,12 @@ export class FrameworkChat {
         if (!manual && (!this.repairLimit() || readRepair(message))) return false;
         return this.repair(message,this.state(),null,generation,manual,{purpose:'review'});
     }
+    async reviewPanel(scope = {target:'all'}) {
+        const message=this.getContext().chat.at(-1),before=this.state();
+        if (!this.active() || !before.initialized || !validReply(message) || this.saving || this.repairJob
+            || this.uncertainSaves.has(message) || snapFor(message)?.reply!==message.mes || !this.generateRepair) return false;
+        return this.repair(message,before,null,null,true,{purpose:'panel_review',scope:panelReviewScope(before,scope)});
+    }
     async completeMissing() {
         const ctx=this.getContext(),message=ctx.chat.at(-1),before=this.state(),missing=coverageIssues(before);
         if (!this.active() || !validReply(message) || this.saving || this.repairJob || this.uncertainSaves.has(message) || !missing.length) return false;
@@ -163,8 +170,9 @@ export class FrameworkChat {
     async repair(message, before, error, generation, manual = false, completion = null) {
         const ctx = this.getContext(), original = message.mes, swipe = message.swipe_id ?? 0;
         const configured = this.repairLimit(), maximum = [0,1,2].includes(configured) ? configured : 2;
+        const panelReview = completion?.purpose === 'panel_review';
         const review = completion?.purpose === 'review';
-        const completionMode = review ? 'review' : !!completion;
+        const completionMode = panelReview ? completion : review ? 'review' : !!completion;
         const limit = completion ? (manual ? 1 : Math.min(1,maximum)) : manual ? Math.max(1, maximum) : maximum;
         if (!this.generateRepair || !limit || this.repairJob || original.length > 200000 || (!manual && readRepair(message))) {
             this.report('本轮数据未提交；自动纠错已关闭、已尝试或暂不可用。'); return false;
@@ -174,7 +182,10 @@ export class FrameworkChat {
         this.repairJob = job;
         const record = { version: 1, reply: original, original, status: 'pending', baseRevision: before.revision,
             attempts: [], previousAttempts: (prior?.previousAttempts ?? 0) + (prior?.attempts?.length ?? 0), manual,
-            purpose: review ? 'review' : completion ? 'coverage' : 'correction', failure: review ? {status:'review_requested',code:'scene_review'} : completion ? {status:'incomplete',code:'coverage',missing:completion.missing} : frameworkFailure(error) };
+            purpose: panelReview ? 'panel_review' : review ? 'review' : completion ? 'coverage' : 'correction',
+            ...(panelReview ? {scope:completion.scope} : {}),
+            history: [...(prior?.history ?? []), ...(prior ? [{purpose:prior.purpose,scope:prior.scope,status:prior.status,baseRevision:prior.baseRevision,revision:prior.revision,attempts:prior.attempts}] : [])].slice(-5),
+            failure: panelReview ? {status:'review_requested',code:'panel_review'} : review ? {status:'review_requested',code:'scene_review'} : completion ? {status:'incomplete',code:'coverage',missing:completion.missing} : frameworkFailure(error) };
         let rejected = original, failure = record.failure;
         const valid = () => !job.cancelled && this.active() && this.getContext().chatMetadata === ctx.chatMetadata
             && ctx.chat.length === length && ctx.chat.at(-1) === message && message.mes === original && (message.swipe_id ?? 0) === swipe
@@ -195,7 +206,7 @@ export class FrameworkChat {
                 // Persist the budget before any request. Reload cannot restart it.
                 await persist(); if (!valid()) return false;
                 let raw;
-                try { raw = await this.generateRepair(repairPrompt(before, original, rejected, failure, ctx.chat.slice(Math.max(0,length-5),-1).filter(m => !m.is_system), completionMode)); }
+                try { raw = await this.generateRepair(repairPrompt(before, original, rejected, failure, ctx.chat.slice(Math.max(0,length-(panelReview?11:5)),-1).filter(m => !m.is_system), completionMode)); }
                 catch { if (valid()) { record.status = 'request_failed'; record.attempts.at(-1).status = 'request_failed'; await persist(); } return false; }
                 if (!valid()) return false;
                 if (typeof raw !== 'string' || raw.length > 180000) { record.status = 'failed'; record.attempts.at(-1).status = 'output_limit'; await persist(); return false; }
@@ -210,7 +221,7 @@ export class FrameworkChat {
                 }
                 if (!valid()) return false;
                 const backup = cloneFramework(message);
-                const checked = review && !result.transaction.ops.length;
+                const checked = (review || panelReview) && !result.transaction.ops.length;
                 if (checked) result.state = before; // A semantic check alone does not add a game revision.
                 record.status = checked ? 'checked' : 'corrected'; record.reply = result.visibleText; record.revision = result.state.revision;
                 record.attempts.at(-1).status = 'accepted';

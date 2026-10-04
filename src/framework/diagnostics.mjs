@@ -56,7 +56,7 @@ export function reviewFrameworkChat(messages, observations, limit = 100) {
             } catch (error) { Object.assign(row, frameworkFailure(error), { basis: 'replay' }); }
         }
         const repair = readRepair(message);
-        if (repair) row.repair = { purpose: repair.purpose, status: repair.status, attempts: repair.attempts?.length ?? 0,
+        if (repair) row.repair = { purpose: repair.purpose, scope:repair.scope, history:repair.history, status: repair.status, attempts: repair.attempts?.length ?? 0,
             previousAttempts: repair.previousAttempts ?? 0, failure: repair.failure,
             results: repair.attempts?.map(a => ({ attempt: a.attempt, status: a.status, failure: a.failure })) };
         rows.push(row);

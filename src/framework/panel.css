@@ -54,3 +54,5 @@
 
 
 .uf-game-summaries{padding:0 7px 6px;display:grid;gap:4px}
+
+.uf-review{font-size:.72em;line-height:1.15;padding:1px 4px;margin-left:4px;white-space:nowrap;opacity:.75}.uf-review:hover,.uf-review:focus-visible{opacity:1}.uf-field-label{flex-wrap:wrap}
