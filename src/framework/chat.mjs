@@ -21,9 +21,9 @@ const snapFor = m => (m.extra?.rpg_framework_swipes ?? m.swipe_info?.[m.swipe_id
 
 /** Dependency-injected chat lifecycle: no ST globals and no account-wide game state. */
 export class FrameworkChat {
-    constructor({ getContext, save, enabled = () => true, render = () => {}, report = () => {}, observe = () => {}, generateRepair, repairLimit = () => 2, sceneReviewMode = () => 'noop', repairStatus = () => {} }) {
+    constructor({ getContext, save, enabled = () => true, render = () => {}, report = () => {}, observe = () => {}, generateRepair, repairLimit = () => 2, sceneReviewMode = () => 'noop', repairStatus = () => {}, gameContext = () => '' }) {
         Object.assign(this, { getContext, save, enabled, render, report }); this.generation = null; this.serial = 0;
-        Object.assign(this, { generateRepair, repairLimit, sceneReviewMode }); this.repairJob = null;
+        Object.assign(this, { generateRepair, repairLimit, sceneReviewMode, gameContext }); this.repairJob = null;
         this.uncertainSaves = new WeakSet();
         this.repairStatus = () => { try { repairStatus(); } catch { /* Presentation cannot affect commit status. */ } };
         // Optional diagnostics must never change the transaction outcome.
@@ -133,17 +133,17 @@ export class FrameworkChat {
         try { await this.save(); } catch(error) { if(prior===undefined)delete ctx.chatMetadata[CHAT_FRAMEWORK_KEY];else ctx.chatMetadata[CHAT_FRAMEWORK_KEY]=prior;throw error; } finally { this.saving=false; }
         this.render(this.state());
     }
-    async reviewScene(message = this.getContext().chat.at(-1), manual = true, generation = null) {
+    async reviewScene(message = this.getContext().chat.at(-1), manual = true, generation = null, hint = '') {
         if (!this.active() || !validReply(message) || this.getContext().chat.at(-1)!==message || this.saving || this.repairJob
             || this.uncertainSaves.has(message) || snapFor(message)?.reply!==message.mes || !this.generateRepair) return false;
         if (!manual && (!this.repairLimit() || readRepair(message))) return false;
-        return this.repair(message,this.state(),null,generation,manual,{purpose:'review'});
+        return this.repair(message,this.state(),null,generation,manual,{purpose:'review',hint:String(hint).trim().slice(0,2000)});
     }
-    async reviewPanel(scope = {target:'all'}) {
+    async reviewPanel(scope = {target:'all'}, hint = '') {
         const message=this.getContext().chat.at(-1),before=this.state();
         if (!this.active() || !before.initialized || !validReply(message) || this.saving || this.repairJob
             || this.uncertainSaves.has(message) || snapFor(message)?.reply!==message.mes || !this.generateRepair) return false;
-        return this.repair(message,before,null,null,true,{purpose:'panel_review',scope:panelReviewScope(before,scope)});
+        return this.repair(message,before,null,null,true,{purpose:'panel_review',scope:panelReviewScope(before,scope),hint:String(hint).trim().slice(0,2000)});
     }
     async completeMissing() {
         const ctx=this.getContext(),message=ctx.chat.at(-1),before=this.state(),missing=coverageIssues(before);
@@ -184,7 +184,8 @@ export class FrameworkChat {
             attempts: [], previousAttempts: (prior?.previousAttempts ?? 0) + (prior?.attempts?.length ?? 0), manual,
             purpose: panelReview ? 'panel_review' : review ? 'review' : completion ? 'coverage' : 'correction',
             ...(panelReview ? {scope:completion.scope} : {}),
-            history: [...(prior?.history ?? []), ...(prior ? [{purpose:prior.purpose,scope:prior.scope,status:prior.status,baseRevision:prior.baseRevision,revision:prior.revision,attempts:prior.attempts}] : [])].slice(-5),
+            ...(completion?.hint ? {hint:completion.hint} : {}),
+            history: [...(prior?.history ?? []), ...(prior ? [{purpose:prior.purpose,scope:prior.scope,hint:prior.hint,status:prior.status,baseRevision:prior.baseRevision,revision:prior.revision,attempts:prior.attempts}] : [])].slice(-5),
             failure: panelReview ? {status:'review_requested',code:'panel_review'} : review ? {status:'review_requested',code:'scene_review'} : completion ? {status:'incomplete',code:'coverage',missing:completion.missing} : frameworkFailure(error) };
         let rejected = original, failure = record.failure;
         const valid = () => !job.cancelled && this.active() && this.getContext().chatMetadata === ctx.chatMetadata
@@ -206,7 +207,7 @@ export class FrameworkChat {
                 // Persist the budget before any request. Reload cannot restart it.
                 await persist(); if (!valid()) return false;
                 let raw;
-                try { raw = await this.generateRepair(repairPrompt(before, original, rejected, failure, ctx.chat.slice(Math.max(0,length-(panelReview?11:5)),-1).filter(m => !m.is_system), completionMode)); }
+                try { raw = await this.generateRepair(repairPrompt(before, original, rejected, failure, ctx.chat.slice(Math.max(0,length-(panelReview?11:5)),-1).filter(m => !m.is_system), completionMode, this.gameContext(), completion?.hint)); }
                 catch { if (valid()) { record.status = 'request_failed'; record.attempts.at(-1).status = 'request_failed'; await persist(); } return false; }
                 if (!valid()) return false;
                 if (typeof raw !== 'string' || raw.length > 180000) { record.status = 'failed'; record.attempts.at(-1).status = 'output_limit'; await persist(); return false; }

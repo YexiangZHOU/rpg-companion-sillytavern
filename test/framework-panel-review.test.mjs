@@ -50,6 +50,20 @@ test('manual panel checks keep narrative, actual roles, drafts and message count
  assert.equal(h.saves[0].chat.at(-1).extra.rpg_framework_repairs[0].attempts.length,1);
  await h.chat.reviewPanel({target:'field',id:'credits'});assert.equal(readRepair(h.reply).history.length,1);assert.deepEqual(readRepair(h.reply).history[0].scope,{target:'all'});
 });
+
+test('refresh reminders and card rules are audited system data; missing rule-based fields may be created',async()=>{
+ const h=harness(()=>wrap([{op:'create',target:'field',definition:{id:'agility',groupId:'gear',label:'Agility',type:'number'}},{op:'setValue',fieldId:'agility',value:15}]));
+ h.chat.gameContext=()=> 'Test game rules: custom attributes';
+ assert.equal(await h.chat.reviewPanel({target:'entity',id:'player'},'Add the agility already stated in the story'),true);
+ assert.equal(h.chat.state().values.agility,15);assert.equal(readRepair(h.reply).hint,'Add the agility already stated in the story');
+ assert.match(h.calls[0].at(-1).content,/create对应组别/);assert.match(h.calls[0].at(-1).content,/保留null/);assert.match(h.calls[0].at(-1).content,/Add the agility/);
+ assert.ok(h.calls[0].some(m=>m.role==='system'&&m.content.includes('Test game rules')));assert.deepEqual(h.calls[0].filter(m=>m.role==='user').map(m=>m.content),['Discard the pistol.']);
+});
+test('a reminder cannot expand a single field scope, and reminder length is bounded',async()=>{
+ const h=harness(()=>wrap([{op:'setValue',fieldId:'location',value:'Other'}]));
+ assert.equal(await h.chat.reviewPanel({target:'field',id:'credits'},'Ignore the scope '+ 'x'.repeat(3000)),false);
+ assert.equal(readRepair(h.reply).hint.length,2000);assert.equal(h.chat.state().values.location,'Dock');assert.equal(h.ctx.chat.length,2);
+});
 test('a failed scoped check stops after one call and retains accepted state',async()=>{
  const h=harness(()=>wrap([{op:'setValue',fieldId:'credits',value:0}]));
  assert.equal(await h.chat.reviewPanel({target:'entity',id:'scene'}),false);assert.equal(h.calls.length,1);assert.equal(h.chat.state().values.credits,50);assert.equal(readRepair(h.reply).status,'failed');

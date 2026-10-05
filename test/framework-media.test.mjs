@@ -7,6 +7,7 @@ import { FrameworkChat } from '../src/framework/chat.mjs';
 import { writeFrameworkSnapshot } from '../src/framework/snapshots.mjs';
 import { readRepair } from '../src/framework/repair.mjs';
 import { saveFrameworkVerified } from '../src/framework/storage.mjs';
+import { ImagePool } from '../src/systems/features/imagePool.mjs';
 const visual=(description,mode='portrait',subject='object')=>({mode,subject,description});
 function state(){return applyFrameworkTransaction(emptyFramework(),{protocol:1,id:'start',baseRevision:0,ops:[{op:'init',title:'Space',entities:[
     {id:'pilot',kind:'player',label:'Shared name',visual:visual('Short dark hair, red flight suit','portrait','person')},
@@ -59,6 +60,29 @@ function harness(){
         generate:async(prompt,valid)=>{calls.push(prompt);return provider(valid);},persist:async()=>{if(failSave)throw Error('secret');saves.push(structuredClone(ctx.chat));}});
     return {manager,calls,saves,get s(){return s;},set s(v){s=v;},get ctx(){return ctx;},set ctx(v){ctx=v;},set mode(v){mode=v;},set provider(v){provider=v;},set failSave(v){failSave=v;}};
 }
+test('different target images really overlap and serialized commits preserve both completions',async()=>{
+    const h=harness(),finish=[];let saving=0,peakSaving=0,started;
+    const bothStarted=new Promise(r=>started=r);
+    h.provider=()=>new Promise(r=>{finish.push(r);if(finish.length===2)started();});
+    h.manager.persist=async()=>{saving++;peakSaving=Math.max(peakSaving,saving);await new Promise(r=>setImmediate(r));saving--;};
+    const first=h.manager.run('entity:pilot'),second=h.manager.run('entity:ship');
+    await bothStarted;assert.equal(h.calls.length,2);assert.equal(h.manager.jobs.size,2);
+    assert.equal(await h.manager.run('entity:pilot',{refresh:true}),false);
+    finish[1]('/user/images/ship.png');finish[0]('/user/images/pilot.png');assert.deepEqual(await Promise.all([first,second]),[true,true]);
+    assert.equal(peakSaving,1);assert.equal(readMedia(h.ctx.chat)['entity:pilot'].url,'/user/images/pilot.png');assert.equal(readMedia(h.ctx.chat)['entity:ship'].url,'/user/images/ship.png');
+    assert.equal(h.manager.jobs.size,0);assert.equal(h.ctx.chat.length,1);
+});
+test('shared image pool admits ten simultaneous requests, queues extras and skips stale queued work',async()=>{
+    const pool=new ImagePool(10),finish=[];let calls=0,valid=true;
+    const jobs=Array.from({length:12},(_,i)=>pool.run(()=>{calls++;return new Promise(r=>finish.push(r));},()=>i<10||valid));
+    await new Promise(r=>setImmediate(r));assert.equal(calls,10);assert.equal(pool.active,10);assert.equal(pool.waiting.length,2);valid=false;
+    finish.forEach(r=>r('done'));const results=await Promise.all(jobs);assert.equal(calls,10);assert.equal(pool.peak,10);assert.equal(pool.active,0);assert.deepEqual(results.slice(10),[null,null]);
+});
+test('canceling one concurrent image does not discard another target',async()=>{
+    const h=harness(),finish=[];h.provider=()=>new Promise(r=>finish.push(r));const jobs=[h.manager.run('entity:pilot'),h.manager.run('entity:ship')];
+    await new Promise(r=>setImmediate(r));h.manager.cancel('entity:pilot');finish[0]('/user/images/pilot.png');finish[1]('/user/images/ship.png');
+    assert.deepEqual(await Promise.all(jobs),[false,true]);assert.equal(readMedia(h.ctx.chat)['entity:pilot'].url,undefined);assert.equal(readMedia(h.ctx.chat)['entity:ship'].url,'/user/images/ship.png');
+});
 test('automatic media is bounded, persisted, deduplicated and never appends chat',async()=>{
     const h=harness(),message=h.ctx.chat[0];await h.manager.automatic(message);
     assert.equal(h.calls.length,2);assert.equal(h.ctx.chat.length,1);assert.equal(Object.keys(readMedia(h.ctx.chat)).length,2);

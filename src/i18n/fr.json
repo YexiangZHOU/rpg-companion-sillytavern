@@ -391,5 +391,6 @@
     "actions.scene_pending": "Generating scene; previous image retained",
     "actions.scene_ready": "Scene saved",
     "actions.scene_failed": "Generation failed; previous image retained",
-    "actions.scene_interrupted": "Interrupted; previous image retained"
+    "actions.scene_interrupted": "Interrupted; previous image retained",
+    "actions.sceneDescription": "Scene description (expand for full text)"
 }

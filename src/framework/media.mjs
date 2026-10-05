@@ -89,43 +89,51 @@ export function writeMedia(message, entries) {
     if(message.swipe_info?.[swipe]){message.swipe_info[swipe].extra??={};message.swipe_info[swipe].extra[MEDIA_KEY]=structuredClone(message.extra[MEDIA_KEY]);}
 }
 
-/** Serialized externally with native image jobs. No provider access or chat append. */
+/** Concurrent providers, serialized metadata commits. No chat append. */
 export class FrameworkMedia {
     constructor({getContext,state,active,mode,blocked,generate,persist,render=()=>{}}) {
         Object.assign(this,{getContext,state,active,mode,blocked,generate,persist,render});
-        this.job=null;this.seen=new WeakSet();this.uncertain=new WeakSet();this.epoch=0;
+        this.jobs=new Map();this.writeTail=Promise.resolve();this.committing=false;this.seen=new WeakSet();this.uncertain=new WeakSet();this.epoch=0;
     }
-    cancel(){this.epoch++;if(this.job){this.job.cancelled=true;this.render();}}
-    async write(message,entries){
-        const backup={extra:structuredClone(message.extra),swipe_info:structuredClone(message.swipe_info)};
+    get job(){return this.jobs.values().next().value??null;}
+    busy(key){return this.jobs.has(key);}
+    cancel(key){if(key){const job=this.jobs.get(key);if(job)job.cancelled=true;}else{this.epoch++;for(const job of this.jobs.values())job.cancelled=true;}this.render();}
+    async write(message,entries,valid=()=>true){
+        const previous=this.writeTail;let release;this.writeTail=new Promise(r=>release=r);await previous;
+        try{if(!valid()||this.uncertain.has(message))return false;this.committing=true;return await this.commit(message,entries);}finally{this.committing=false;release();}
+    }
+    async commit(message,entries){
+        const swipe=message.swipe_id??0;
+        const backup={extra:structuredClone(message.extra?.[MEDIA_KEY]),info:structuredClone(message.swipe_info?.[swipe]?.extra?.[MEDIA_KEY])};
         writeMedia(message,entries);
-        try{await this.persist();}catch(error){
-            for(const k of ['extra','swipe_info'])if(backup[k]===undefined)delete message[k];else message[k]=backup[k];
+        try{await this.persist();return true;}catch(error){
+            if(backup.extra===undefined)delete message.extra[MEDIA_KEY];else message.extra[MEDIA_KEY]=backup.extra;
+            if(message.swipe_info?.[swipe]?.extra){if(backup.info===undefined)delete message.swipe_info[swipe].extra[MEDIA_KEY];else message.swipe_info[swipe].extra[MEDIA_KEY]=backup.info;}
             this.uncertain.add(message);throw error;
         }
     }
     async run(key,{automatic=false,refresh=false}={}) {
         const ctx=this.getContext(),message=ctx.chat.at(-1),swipe=message?.swipe_id??0,reply=message?.mes,length=ctx.chat.length;
-        if(!this.active()||this.mode()==='off'||this.job||this.blocked()||!message||message.is_user||message.is_system||this.uncertain.has(message))return false;
+        if(!this.active()||this.mode()==='off'||this.busy(key)||this.jobs.size>=10||this.blocked()||!message||message.is_user||message.is_system||this.uncertain.has(message))return false;
         const target=mediaTargets(this.state()).find(t=>t.key===key),prior=readMedia(ctx.chat)[key];
         if(!target||target.pending||target.locked||prior?.locked || (automatic&&this.mode()!=='auto'))return false;
         if(!refresh&&prior?.fingerprint===target.fingerprint&&(prior.status==='ready'&&safeMediaUrl(prior.url)||automatic&&['failed','requesting'].includes(prior.status)))return false;
-        const job={key,metadata:ctx.chatMetadata,cancelled:false};this.job=job;
+        const job={key,metadata:ctx.chatMetadata,cancelled:false};this.jobs.set(key,job);
         const valid=()=>{
             const now=this.getContext(),current=mediaTargets(this.state()).find(t=>t.key===key);
-            return !job.cancelled&&now.chatMetadata===ctx.chatMetadata&&now.chat.length===length&&now.chat.at(-1)===message
+            return !job.cancelled&&!this.uncertain.has(message)&&now.chatMetadata===ctx.chatMetadata&&now.chat.length===length&&now.chat.at(-1)===message
                 &&message.mes===reply&&(message.swipe_id??0)===swipe&&this.active()&&!this.blocked()&&this.mode()!=='off'
                 &&(!automatic||this.mode()==='auto')&&current&&!current.pending&&!current.locked&&!readMedia(now.chat)[key]?.locked&&current.fingerprint===target.fingerprint;
         };
         try{
-            await this.write(message,{[key]:{...prior,fingerprint:target.fingerprint,status:'requesting'}});
+            await this.write(message,{[key]:{...prior,fingerprint:target.fingerprint,status:'requesting'}},valid);
             this.render();if(!valid())return false;
             let url;
-            try {url=await this.generate(mediaPrompt(target),valid);} catch {if(valid())await this.write(message,{[key]:{...prior,fingerprint:target.fingerprint,status:'failed',code:'image_request'}});return false;}
+            try {url=await this.generate(mediaPrompt(target),valid);} catch {if(valid())await this.write(message,{[key]:{...prior,fingerprint:target.fingerprint,status:'failed',code:'image_request'}},valid);return false;}
             if(!valid())return false;
-            if(!safeMediaUrl(url)){await this.write(message,{[key]:{...prior,fingerprint:target.fingerprint,status:'failed',code:'image_result'}});return false;}
-            await this.write(message,{[key]:{url,imageFingerprint:target.fingerprint,fingerprint:target.fingerprint,status:'ready',locked:false}});return true;
-        }finally{this.job=null;this.render();}
+            if(!safeMediaUrl(url)){await this.write(message,{[key]:{...prior,fingerprint:target.fingerprint,status:'failed',code:'image_result'}},valid);return false;}
+            return await this.write(message,{[key]:{url,imageFingerprint:target.fingerprint,fingerprint:target.fingerprint,status:'ready',locked:false}},valid);
+        }finally{this.jobs.delete(key);this.render();}
     }
     async automatic(message){
         if(this.seen.has(message))return;this.seen.add(message);
@@ -140,7 +148,7 @@ export class FrameworkMedia {
     }
     async toggleLock(key){
         const ctx=this.getContext(),message=ctx.chat.at(-1),entry=readMedia(ctx.chat)[key];
-        if(!this.active()||this.blocked()||this.job||!message||message.is_user||this.uncertain.has(message)||!entry?.url)return;
+        if(!this.active()||this.blocked()||this.busy(key)||!message||message.is_user||this.uncertain.has(message)||!entry?.url)return;
         await this.write(message,{[key]:{...entry,locked:!entry.locked}});this.render();
     }
 }

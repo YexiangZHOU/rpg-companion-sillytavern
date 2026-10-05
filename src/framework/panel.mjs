@@ -29,23 +29,29 @@ export function gameSummaryFields(state, entity, appearance = []) {
 }
 
 export class FrameworkPanel {
-    constructor(root, { onOperation, language = 'zh', getPortrait, presentation = 'editor', onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia, onReview, reviewDisabled } = {}) {
-        Object.assign(this, { root, onOperation, getPortrait, presentation, onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia, onReview, reviewDisabled }); this.strings = panelStrings[language] ?? panelStrings.zh;
+    constructor(root, { onOperation, language = 'zh', getPortrait, onViewImage, presentation = 'editor', onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia, onReview, reviewDisabled } = {}) {
+        Object.assign(this, { root, onOperation, getPortrait, onViewImage, presentation, onPortrait, onPortraitLock, isPortraitLocked, hasGeneratedPortrait, renderMedia, onReview, reviewDisabled }); this.strings = panelStrings[language] ?? panelStrings.zh;
         this.entityId = null; this.selected = new Map(); this.opened = new Map(); this.scrollPositions = new Map(); this.renderedGroup = null; this.serial = 0;
         root.classList.add('uf-panel');
+    }
+    imageInteraction(image,url,label) {
+        if(!this.onViewImage)return;
+        image.tabIndex=0;image.setAttribute('role','button');image.setAttribute('aria-label',this.strings===panelStrings.zh?`查看 ${label} 图片`:`View ${label} image`);
+        image.addEventListener('click',()=>this.onViewImage(url,label));
+        image.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();image.click();}});
     }
     reviewButton(scope, label) {
         if (!this.onReview) return document.createDocumentFragment();
         const zh=this.strings===panelStrings.zh;
-        const control=button(zh?'核验':'Check',async event=>{
+        const control=button(zh?'刷新':'Refresh',async event=>{
             event.preventDefault();event.stopPropagation();
             if(this.reviewDisabled?.())return;
             control.disabled=true;
             try { await this.onReview(scope); } finally { control.disabled=!!this.reviewDisabled?.(); }
         },'uf-subtle uf-review');
         control.disabled=!!this.reviewDisabled?.();
-        control.title=zh?`后台核验 ${label}（1次文字请求，不添加发言）`:`Check ${label} in the background (1 text call, no chat message)`;
-        control.setAttribute('aria-label',(zh?'后台核验 ':'Check ')+label);
+        control.title=zh?`后台刷新 ${label}（1次文字请求，不添加发言）`:`Refresh ${label} in the background (1 text call, no chat message)`;
+        control.setAttribute('aria-label',(zh?'后台刷新 ':'Refresh ')+label);
         control.dataset.focus=`review_${scope.target}_${scope.id??'all'}_${scope.itemId??''}`;
         return control;
     }
@@ -84,7 +90,7 @@ export class FrameworkPanel {
         const identity = node('div', 'uf-identity');
         const portrait = node('div', 'uf-avatar', entity?.label.slice(0, 1) ?? '◇'); portrait.setAttribute('aria-hidden', 'true');
         const portraitUrl = entity && this.getPortrait?.(entity);
-        if (portraitUrl) { const img = node('img', 'uf-avatar-image'); img.src = portraitUrl; img.alt = entity.label; img.addEventListener('error', () => img.remove(), { once: true }); portrait.append(img); }
+        if (portraitUrl) { const img = node('img', 'uf-avatar-image'); img.src = portraitUrl; img.alt = entity.label; img.addEventListener('error', () => img.remove(), { once: true }); this.imageInteraction(img,img.src,entity.label); portrait.append(img); }
         const names = node('div', 'uf-names'); names.append(node('h2', '', entity?.label ?? state.title));
         if (entity?.kind) names.append(node('p', '', ({ zh:{player:'玩家',npc:'角色',scene:'场景',encounter:'遭遇'},en:{player:'Player',npc:'Character',scene:'Scene',encounter:'Encounter'} }[t === panelStrings.zh ? 'zh':'en'][entity.kind]) ?? entity.kind));
         if (entities.length > 1) {
@@ -154,7 +160,7 @@ export class FrameworkPanel {
         if (entity.kind !== 'scene' && entity.kind !== 'encounter') {
             const portrait = node('div', 'uf-avatar', entity.label.slice(0, 1));
             const url = this.getPortrait?.(entity);
-            if (url) { const img = node('img', 'uf-avatar-image'); img.src = url; img.alt = entity.label; img.addEventListener('error', () => img.remove(), { once: true }); portrait.append(img); }
+            if (url) { const img = node('img', 'uf-avatar-image'); img.src = url; img.alt = entity.label; img.addEventListener('error', () => img.remove(), { once: true }); this.imageInteraction(img,img.src,entity.label); portrait.append(img); }
             identity.append(portrait);
         }
         const names = node('div', 'uf-names'); names.append(node('h2', '', entity.label));
@@ -179,7 +185,7 @@ export class FrameworkPanel {
             const url = this.getPortrait?.(entity);
             if (url) {
                 const image = node('img', 'uf-scene-illustration'); image.src = url; image.alt = entity.label;
-                image.addEventListener('error', () => image.remove(), { once: true }); this.root.append(image);
+                image.addEventListener('error', () => image.remove(), { once: true }); this.imageInteraction(image,url,entity.label); this.root.append(image);
             }
         }
         const groups = activeFrameworkGroups(state, entity.id);

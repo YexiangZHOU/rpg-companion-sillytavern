@@ -11,6 +11,7 @@
 
 import { characters, this_chid } from '../../../../../../../script.js';
 import { withAvatarJob } from './avatarQueue.mjs';
+import { concurrentNativeImages, generateNativeImage } from './nativeImages.js';
 import { safeGenerateRaw } from '../../utils/responseExtractor.js';
 import { executeSlashCommandsOnChatInput } from '../../../../../../../scripts/slash-commands.js';
 import { selected_group, getGroupMembers } from '../../../../../../group-chats.js';
@@ -167,6 +168,18 @@ export async function generateAvatarsForCharacters(characterNames, onStarted = n
     }
 
     try {
+        if (concurrentNativeImages()) {
+            await Promise.all(needsGeneration.map(async characterName => {
+                try {
+                    const prompt = await withAvatarJob(() => generateAvatarPrompt(characterName, shouldContinue),
+                        () => extensionSettings.autoGenerateAvatars && shouldContinue() && !hasExistingAvatar(characterName));
+                    if (shouldContinue() && extensionSettings.autoGenerateAvatars && !hasExistingAvatar(characterName)) {
+                        await generateSingleAvatar(characterName, prompt, () => extensionSettings.autoGenerateAvatars && shouldContinue());
+                    }
+                } finally { pendingGenerations.delete(characterName); }
+            }));
+            return;
+        }
         // Generate images one at a time, generating prompt on demand
         for (const characterName of needsGeneration) {
             if (!shouldContinue()) break;
@@ -227,6 +240,10 @@ export async function regenerateAvatar(characterName) {
 
     try {
         // Generate new LLM prompt
+        if (concurrentNativeImages()) {
+            const prompt = await withAvatarJob(() => generateAvatarPrompt(characterName));
+            return await generateSingleAvatar(characterName, prompt);
+        }
         return await withAvatarJob(async () => {
             const prompt = await generateAvatarPrompt(characterName);
             return await generateSingleAvatar(characterName, prompt);
@@ -330,7 +347,7 @@ async function generateSingleAvatar(characterName, prompt = null, shouldContinue
 
     try {
         // Execute /sd command with quiet=true to suppress chat output
-        const result = await executeSlashCommandsOnChatInput(
+        const result = concurrentNativeImages() ? await generateNativeImage(prompt, {valid:shouldContinue}) : await executeSlashCommandsOnChatInput(
             `/sd quiet=true ${prompt}`,
             { clearChatInput: false }
         );

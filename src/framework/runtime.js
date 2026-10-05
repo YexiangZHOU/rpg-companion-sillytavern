@@ -5,6 +5,8 @@ import { extensionSettings, incrementSeparateGenerationId } from '../core/state.
 import { i18n } from '../core/i18n.js';
 import { FrameworkChat, frameworkMode } from './chat.mjs';
 import { FrameworkPanel, FrameworkRoster } from './panel.mjs';
+import { refreshDialog } from './refreshDialog.mjs';
+import { showPortraitPreview } from '../systems/ui/portraitPreview.js';
 import { evaluateSuppression } from '../systems/generation/suppression.js';
 import { processActionReply, renderActionMessages } from '../systems/features/actionBridge.js';
 import { actionPreference } from '../systems/features/actionStore.js';
@@ -14,7 +16,7 @@ import { saveFrameworkVerified } from './storage.mjs';
 import { SlashCommandParser } from '../../../../../slash-commands/SlashCommandParser.js';
 import { encounterModal } from '../systems/ui/encounterUI.js';
 import { preserveBalancedDice } from '../systems/ui/balancedLayout.js';
-import { withAvatarJob } from '../systems/features/avatarQueue.mjs';
+import { generateNativeImage } from '../systems/features/nativeImages.js';
 import { FrameworkObservations, reviewFrameworkChat, frameworkDiagnosticLabel, frameworkSceneWarnings } from './diagnostics.mjs';
 import { readRepair } from './repair.mjs';
 import { FrameworkMedia, mediaTargets, readMedia, safeMediaUrl, coverageIssues } from './media.mjs';
@@ -30,6 +32,7 @@ const save = () => saveFrameworkVerified(getContext());
 const observations = new FrameworkObservations();
 const report = message => { toastr.warning(message, text('通用 RPG 框架','Universal RPG framework')); const el = document.getElementById('rpg-framework-feedback'); if (el) el.textContent = message; };
 export const frameworkChat = new FrameworkChat({ getContext, save, enabled: () => !!extensionSettings.enabled, render: renderFramework, report,
+    gameContext:()=>{const ctx=getContext(),card=ctx.characters?.[ctx.characterId],data=card?.data??card;return data?JSON.stringify({name:card.name,description:data.description,scenario:data.scenario,system_prompt:data.system_prompt}).slice(0,16000):'';},
     observe: (message, event) => { observations.record(message, event); renderDiagnostics(); },
     // Call once directly; the generic wrapper can issue an unbudgeted fallback.
     generateRepair: prompt => generateRaw({ prompt, quietToLoud: false, responseLength: 4096, trimNames: false }),
@@ -44,21 +47,21 @@ function renderRepairStatus() {
     const ctx = getContext(), message = ctx.chat.at(-1), repair = readRepair(message);
     const job = frameworkChat.repairJob;
     if (job?.metadata === ctx.chatMetadata && job.message === message) {
-        host.append(node('small', '', text(job.cancelled ? '已停止后续请求，正在丢弃过期结果。' : readRepair(message)?.purpose === 'review' ? '正在后台复核场景与角色…' : '正在后台修正面板数据…', job.cancelled ? 'Stopped; pending output will be discarded.' : readRepair(message)?.purpose === 'review' ? 'Reviewing scene and characters…' : 'Correcting panel data in the background…')));
+        host.append(node('small', '', text(job.cancelled ? '已停止后续请求，正在丢弃过期结果。' : readRepair(message)?.purpose === 'review' ? '正在后台刷新场景与角色…' : '正在后台修正面板数据…', job.cancelled ? 'Stopped; pending output will be discarded.' : readRepair(message)?.purpose === 'review' ? 'Reviewing scene and characters…' : 'Correcting panel data in the background…')));
         const cancel = node('button', 'menu_button', text('停止纠错', 'Stop correction')); cancel.type = 'button'; cancel.disabled = job.cancelled;
         cancel.addEventListener('click', () => frameworkChat.cancelRepair()); host.append(cancel); return;
     }
     if (!repair) return;
     if (frameworkChat.uncertainSaves.has(message)) { host.append(node('small','',text('保存结果尚未确认；请重新加载聊天核实，暂不重复纠错。','Save status is uncertain. Reload the chat to verify before retrying.'))); return; }
-    host.append(node('small', '', repair.status === 'checked' ? text('核验已完成，模型未报告额外变化。','Check completed; the model reported no additional changes.') : repair.status === 'corrected'
-        ? repair.purpose==='panel_review' ? text('面板核验更新已保存；可在诊断中审查。','Panel check updates saved; review them in diagnostics.') : repair.purpose==='review' ? text('场景与角色补充已保存；可在诊断中审查。','Scene and character additions saved; review them in diagnostics.') : repair.purpose==='coverage' ? text('补齐提交已保存；请查看是否还有缺项。','Completion saved; check for any remaining gaps.') : text(`面板数据已自动修正 · ${repair.attempts.length} 次请求`, `Panel data corrected · ${repair.attempts.length} requests`)
+    host.append(node('small', '', repair.status === 'checked' ? text('刷新已完成，模型未报告额外变化。','Check completed; the model reported no additional changes.') : repair.status === 'corrected'
+        ? repair.purpose==='panel_review' ? text('面板刷新更新已保存；可在诊断中审查。','Panel check updates saved; review them in diagnostics.') : repair.purpose==='review' ? text('场景与角色补充已保存；可在诊断中审查。','Scene and character additions saved; review them in diagnostics.') : repair.purpose==='coverage' ? text('补齐提交已保存；请查看是否还有缺项。','Completion saved; check for any remaining gaps.') : text(`面板数据已自动修正 · ${repair.attempts.length} 次请求`, `Panel data corrected · ${repair.attempts.length} requests`)
         : text('面板纠错或补齐未完成，仍使用之前的数据。', 'Correction or completion incomplete; the previous data remains active.')));
     if (!['corrected','checked'].includes(repair.status)) {
         const checking=['review','panel_review'].includes(repair.purpose);
-        const retry = node('button', 'menu_button', checking?text('重新核验','Retry check'):text('重新纠错', 'Retry correction')); retry.type = 'button';
+        const retry = node('button', 'menu_button', checking?text('重新刷新','Retry check'):text('重新纠错', 'Retry correction')); retry.type = 'button';
         retry.disabled = !!frameworkChat.repairJob || is_send_press;
         retry.title = checking?text('额外1次文字请求；不会添加玩家发言。','One additional text call without a player message.'):text('额外请求模型，最多两次；不会添加玩家发言。','Requests up to two additional model calls without a player message.');
-        retry.addEventListener('click', () => { if (!is_send_press) void (repair.purpose==='panel_review'?reviewPanel(repair.scope):repair.purpose==='review'?frameworkChat.reviewScene():repair.purpose==='coverage'?frameworkChat.completeMissing():frameworkChat.retryRepair(message)); }); host.append(retry);
+        retry.addEventListener('click', () => { if (!is_send_press) void (repair.purpose==='panel_review'?reviewPanel(repair.scope):repair.purpose==='review'?requestRefresh({target:'all'},true):repair.purpose==='coverage'?frameworkChat.completeMissing():frameworkChat.retryRepair(message)); }); host.append(retry);
     }
 }
 
@@ -111,23 +114,18 @@ const encounterEntity = e => e.kind === 'encounter';
 const portraitMode = () => getContext().chatMetadata?.rpg_framework_v1?.mediaMode ?? actionPreference('portraitMode',extensionSettings.playerPortraitMode??'manual');
 export const frameworkMedia = new FrameworkMedia({
     getContext, state:()=>frameworkChat.state(), active:()=>frameworkChat.active(), mode:portraitMode,
-    blocked:()=>!!(is_send_press||frameworkChat.saving||frameworkChat.repairJob),
-    generate:(prompt,valid)=>withAvatarJob(async()=>{
-        const command=SlashCommandParser.commands?.sd??SlashCommandParser.commands?.imagine;
-        if(!command?.callback)throw Error('Native image module unavailable');
-        const result=await command.callback({quiet:'true',extend:'false',gallery:'false'},prompt);
-        return typeof result==='string'?result:result?.pipe;
-    },valid),
+    blocked:()=>!!(is_send_press||(frameworkChat.saving&&!frameworkMedia.committing)||frameworkChat.repairJob),
+    generate:(prompt,valid)=>generateNativeImage(prompt,{valid}),
     persist:async()=>{frameworkChat.saving=true;try{await save();}finally{frameworkChat.saving=false;}},
     render:()=>renderFramework(frameworkChat.state()),
 });
 function renderMediaTarget(host,key,entity=false) {
     const target=mediaView.get(key);if(!target)return;
-    const entry=readMedia(getContext().chat)[key],busy=frameworkMedia.job?.key===key;
+    const entry=readMedia(getContext().chat)[key],busy=frameworkMedia.busy(key);
     const wrap=node('span','uf-media-controls');
     if(!entity&&safeMediaUrl(entry?.url)){
         const img=node('img','uf-media-icon');img.src=entry.url;img.alt=target.label;img.loading='lazy';
-        img.addEventListener('error',()=>img.remove(),{once:true});wrap.append(img);
+        img.addEventListener('error',()=>img.remove(),{once:true});img.tabIndex=0;img.setAttribute('role','button');img.setAttribute('aria-label',text('查看图片 ','View image ')+target.label);img.onclick=()=>showPortraitPreview(entry.url,target.label);img.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();img.click();}};wrap.append(img);
     }
     const stale=entry?.url&&(entry.imageFingerprint??entry.fingerprint)!==target.fingerprint;
     const status=busy?text('生成中','Generating'):target.pending?text('外观待确认','Appearance pending')
@@ -136,17 +134,12 @@ function renderMediaTarget(host,key,entity=false) {
         :stale?text('外观已变化','Appearance changed'):entry?.url?text('已生成','Generated')
         :portraitMode()==='proposal'?text('建议生成','Proposed'):text('待生成','Pending');
     const label=node('small','uf-media-state',status);label.title=target.pending||target.description;wrap.append(label);
-    const action=(cn,en,handler)=>{const b=node('button','uf-subtle',text(cn,en));b.type='button';b.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();b.disabled=true;try{await handler();}catch{report(text('配图操作未确认完成，请查看状态；必要时重载聊天核验。','Media operation was not confirmed; review the status and reload to verify if needed.'));}finally{b.disabled=false;}});wrap.append(b);return b;};
-    if(safeMediaUrl(entry?.url))action('查看','View',()=>{
-        const dialog=node('dialog','uf-media-dialog'),img=node('img','');img.src=entry.url;img.alt=target.label;
-        const close=node('button','menu_button',text('关闭','Close'));close.type='button';close.onclick=()=>dialog.close();
-        dialog.append(img,close);dialog.addEventListener('close',()=>dialog.remove(),{once:true});document.body.append(dialog);dialog.showModal();
-    });
+    const action=(cn,en,handler)=>{const b=node('button','uf-subtle',text(cn,en));b.type='button';b.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();b.disabled=true;try{await handler();}catch{report(text('配图操作未确认完成，请查看状态；必要时重载聊天刷新。','Media operation was not confirmed; review the status and reload to verify if needed.'));}finally{b.disabled=false;}});wrap.append(b);return b;};
     const generate=action(entry?.url?'刷新':'生成',entry?.url?'Refresh':'Generate',()=>frameworkMedia.run(key,{refresh:true}));
-    generate.disabled=!!(target.pending||target.locked||entry?.locked||portraitMode()==='off'||frameworkMedia.job||is_send_press||frameworkChat.saving||frameworkChat.repairJob||frameworkMedia.uncertain.has(getContext().chat.at(-1)));
+    generate.disabled=!!(target.pending||target.locked||entry?.locked||portraitMode()==='off'||busy||frameworkMedia.jobs.size>=10||is_send_press||(frameworkChat.saving&&!frameworkMedia.committing)||frameworkChat.repairJob||frameworkMedia.uncertain.has(getContext().chat.at(-1)));
     generate.title=text('使用原生绘图模块生成一张图片','Generate one image with the native image module');
-    if(entry?.url){const lock=action(entry.locked?'解锁':'锁图',entry.locked?'Unlock':'Lock',()=>frameworkMedia.toggleLock(key));lock.disabled=!!frameworkMedia.job;}
-    if(busy){const stop=action('停止','Stop',()=>frameworkMedia.cancel());stop.title=text('停止后续请求并丢弃返回结果；已发出的请求仍可能计费。','Stop further requests and discard pending output; an existing request may still be billed.');}
+    if(entry?.url){const lock=action(entry.locked?'解锁':'锁图',entry.locked?'Unlock':'Lock',()=>frameworkMedia.toggleLock(key));lock.disabled=busy;}
+    if(busy){const stop=action('停止','Stop',()=>frameworkMedia.cancel(key));stop.title=text('停止后续请求并丢弃返回结果；已发出的请求仍可能计费。','Stop further requests and discard pending output; an existing request may still be billed.');}
     host.append(wrap);
 }
 function renderCoverage(state) {
@@ -179,14 +172,18 @@ function reviewDisabled() {
     const message=getContext().chat.at(-1);
     return !!(is_send_press||frameworkChat.saving||frameworkChat.repairJob||frameworkMedia.job||frameworkChat.uncertainSaves.has(message)||!message?.extra?.rpg_framework_swipes);
 }
-async function reviewPanel(scope) {
+async function requestRefresh(scope,sceneOnly=false) {
     if(reviewDisabled())return;
-    if(!await frameworkChat.reviewPanel(scope))report(text('核验未完成，仍使用原有数据；请查看数据更新诊断。','Check incomplete; previous data remains active. Review data diagnostics.'));
+    const ctx=getContext(),anchor=ctx.chat.at(-1),metadata=ctx.chatMetadata;
+    const hint=await refreshDialog({scope,sceneOnly,state:frameworkChat.state(),language:zh()?'zh':'en'});
+    if(hint===null||getContext().chatMetadata!==metadata||getContext().chat.at(-1)!==anchor||reviewDisabled())return;
+    if(!await (sceneOnly?frameworkChat.reviewScene(undefined,true,null,hint):frameworkChat.reviewPanel(scope,hint)))report(text('刷新未完成，仍使用原有数据；请查看数据更新诊断。','Check incomplete; previous data remains active. Review data diagnostics.'));
     renderFramework(frameworkChat.state());
 }
-function panel(root) { return new FrameworkPanel(root, { language: zh() ? 'zh' : 'en', getPortrait: portrait, onReview:reviewPanel, reviewDisabled, onOperation: op => frameworkChat.manual([op]) }); }
+const reviewPanel=scope=>requestRefresh(scope);
+function panel(root) { return new FrameworkPanel(root, { language: zh() ? 'zh' : 'en', getPortrait: portrait, onViewImage:showPortraitPreview, onReview:reviewPanel, reviewDisabled, onOperation: op => frameworkChat.manual([op]) }); }
 function roster(root, side) { return new FrameworkRoster(root, {
-    language: zh() ? 'zh' : 'en', side, onReview:reviewPanel, reviewDisabled, getPortrait: portrait, renderMedia: renderMediaTarget,
+    language: zh() ? 'zh' : 'en', side, onReview:reviewPanel, reviewDisabled, getPortrait: portrait, onViewImage:showPortraitPreview, renderMedia: renderMediaTarget,
     onOperation: op => frameworkChat.manual([op]), onPortrait: id => generateFrameworkPortrait(id),
     onPortraitLock: id => togglePortraitLock(id), isPortraitLocked: id => !!currentPortraits()[id]?.locked,
     hasGeneratedPortrait: id => !!currentPortraits()[id]?.url,
@@ -226,14 +223,14 @@ function mount() {
         for (const value of [0,1,2]) { const o = node('option','',value ? text(`最多 ${value} 次额外文字请求`,`Up to ${value} extra text requests`) : text('关闭','Off')); o.value = String(value); repairSelect.append(o); }
         repairSelect.addEventListener('change', () => changePreference(async () => { try { await frameworkChat.setRepairLimit(Number(repairSelect.value)); } finally { repairSelect.value = String(frameworkChat.repairLimit()); } }, text('纠错设置保存失败','Could not save correction settings')));
         repairLabel.append(repairSelect); controls.append(repairLabel);
-        const reviewLabel=node('label','',text('场景与角色复核','Scene and character review')),reviewSelect=node('select','');reviewSelect.id='rpg-framework-scene-review';
-        for(const [value,cn,en] of [['noop','无变化回执后复核','Review no-change receipts'],['all','每轮复核','Review every reply'],['off','关闭自动复核','No automatic review']]){const o=node('option','',text(cn,en));o.value=value;reviewSelect.append(o);}
-        reviewSelect.addEventListener('change',()=>changePreference(()=>frameworkChat.setSceneReviewMode(reviewSelect.value),text('复核设置保存失败','Could not save review settings')));
-        reviewLabel.append(reviewSelect);controls.append(reviewLabel,node('small','',text('复核最多额外1次文字请求，受自动纠错开关限制；不改资金、物品或玩家资产。','Review uses at most one extra text call and respects the correction switch; it cannot change money, items or player assets.')));
-        const reviewButton=node('button','menu_button',text('复核本轮场景与角色（1次文字请求）','Review this scene and cast (1 text call)'));reviewButton.id='rpg-framework-review-now';reviewButton.type='button';
-        reviewButton.addEventListener('click',async()=>{reviewButton.disabled=true;try{await frameworkChat.reviewScene();}finally{renderFramework(frameworkChat.state());}});controls.append(reviewButton);
-        const checkButton=node('button','menu_button',text('核验全部面板（1次文字请求）','Check all panels (1 text call)'));checkButton.id='rpg-framework-check-all';checkButton.type='button';
-        checkButton.addEventListener('click',()=>reviewPanel({target:'all'}));controls.append(checkButton,node('small','',text('各对象、组别、字段和条目也可单独核验；依据最近聊天修正，不推进剧情，不绘图。','Check individual entities, groups, fields and items too. Uses recent conversation; no story progression or image generation.')));
+        const reviewLabel=node('label','',text('场景与角色刷新','Scene and character review')),reviewSelect=node('select','');reviewSelect.id='rpg-framework-scene-review';
+        for(const [value,cn,en] of [['noop','无变化回执后刷新','Review no-change receipts'],['all','每轮刷新','Review every reply'],['off','关闭自动刷新','No automatic review']]){const o=node('option','',text(cn,en));o.value=value;reviewSelect.append(o);}
+        reviewSelect.addEventListener('change',()=>changePreference(()=>frameworkChat.setSceneReviewMode(reviewSelect.value),text('刷新设置保存失败','Could not save review settings')));
+        reviewLabel.append(reviewSelect);controls.append(reviewLabel,node('small','',text('刷新最多额外1次文字请求，受自动纠错开关限制；不改资金、物品或玩家资产。','Review uses at most one extra text call and respects the correction switch; it cannot change money, items or player assets.')));
+        const reviewButton=node('button','menu_button',text('刷新场景与其他角色（1次文字请求）','Refresh scene and other characters (1 text call)'));reviewButton.id='rpg-framework-review-now';reviewButton.type='button';
+        reviewButton.addEventListener('click',()=>requestRefresh({target:'all'},true));controls.append(reviewButton);
+        const checkButton=node('button','menu_button',text('刷新全部面板（1次文字请求）','Refresh all panels (1 text call)'));checkButton.id='rpg-framework-check-all';checkButton.type='button';
+        checkButton.addEventListener('click',()=>reviewPanel({target:'all'}));controls.append(checkButton,node('small','',text('各对象、组别、字段和条目也可单独刷新；依据最近聊天修正，不推进剧情，不绘图。','Check individual entities, groups, fields and items too. Uses recent conversation; no story progression or image generation.')));
         const mediaLabel=node('label','',text('本聊天头像与图标','Chat portraits and icons')),mediaSelect=node('select','');mediaSelect.id='rpg-framework-media-mode';
         for(const [value,cn,en] of [['manual','手动生成','Manual'],['proposal','列出提议，点击生成','Propose; click to generate'],['auto','自动（每轮最多两张）','Automatic (up to two per turn)'],['off','关闭生成','Disabled']]){const o=node('option','',text(cn,en));o.value=value;mediaSelect.append(o);}
         mediaSelect.addEventListener('change', () => changePreference(async () => { try { frameworkMedia.cancel(); await frameworkChat.setMediaMode(mediaSelect.value); } finally { mediaSelect.value = portraitMode(); } }, text('配图设置保存失败','Could not save media settings')));
@@ -348,10 +345,12 @@ export async function generateFrameworkPortrait(entityId, expectedMessage) {
 async function togglePortraitLock(entityId) { return frameworkMedia.toggleLock(`entity:${entityId}`); }
 async function visualRequests(message) {
     const signature=JSON.stringify([message.swipe_id??0,message.mes]);if(visualsSeen.get(message)===signature)return;visualsSeen.set(message,signature);
-    try { await acceptSceneRequest(message); } catch(e) { report(e.message); }
-    renderActionMessages();
     const snapshot=(message.extra?.rpg_framework_swipes??message.swipe_info?.[message.swipe_id??0]?.extra?.rpg_framework_swipes)?.[message.swipe_id??0];
-    if(snapshot?.reply===message.mes&&snapshot.state?.revision>frameworkChat.generation?.before.revision)await frameworkMedia.automatic(message);
+    await Promise.all([
+        acceptSceneRequest(message).catch(e=>report(e.message)),
+        snapshot?.reply===message.mes&&snapshot.state?.revision>frameworkChat.generation?.before.revision ? frameworkMedia.automatic(message) : Promise.resolve(),
+    ]);
+    renderActionMessages();
 }
 export function draftFrameworkAction(modal, value) {
     const input = document.getElementById('send_textarea');

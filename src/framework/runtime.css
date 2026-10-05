@@ -26,3 +26,10 @@
 
 /* Override the host menu button width inside the compact controls column. */
 #rpg-framework-controls>.menu_button{width:100%;max-width:100%;min-width:0;align-self:stretch;justify-content:center;white-space:normal;word-break:normal;overflow-wrap:anywhere;font:inherit;line-height:1.4;margin:0;padding:5px 8px}
+
+.uf-refresh-dialog{color:var(--SmartThemeBodyColor);background:var(--SmartThemeBlurTintColor);border:1px solid var(--SmartThemeBorderColor);border-radius:10px;width:min(520px,90vw);padding:16px;backdrop-filter:blur(20px)}
+.uf-refresh-dialog form{display:flex;flex-direction:column;gap:10px}.uf-refresh-dialog h3,.uf-refresh-dialog p{margin:0}.uf-refresh-dialog p{font-size:.9em}.uf-refresh-dialog textarea{width:100%;resize:vertical}.uf-refresh-actions{display:flex;justify-content:flex-end;gap:8px}
+.rpg-scene-description{font-size:.85em;min-width:0}.rpg-scene-description p{margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.4}
+
+#rpg-portrait-preview>button,.uf-media-dialog>.menu_button,.uf-refresh-actions>.menu_button{width:auto;min-width:max-content;max-width:100%;white-space:nowrap;word-break:normal;flex:0 0 auto;padding:6px 12px;justify-self:end}
+.uf-avatar-image[role=button],.uf-media-icon[role=button],.uf-scene-illustration[role=button]{cursor:zoom-in}.uf-avatar-image[role=button]:focus-visible,.uf-media-icon[role=button]:focus-visible{outline:2px solid var(--SmartThemeQuoteColor);outline-offset:2px}

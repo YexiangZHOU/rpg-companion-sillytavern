@@ -615,5 +615,6 @@
     "actions.scene_pending": "场景生成中，旧图保留",
     "actions.scene_ready": "当前画面已保存",
     "actions.scene_failed": "生成失败，旧图保留",
-    "actions.scene_interrupted": "生成中断，旧图保留"
+    "actions.scene_interrupted": "生成中断，旧图保留",
+    "actions.sceneDescription": "场景描述（展开查看全文）"
 }
