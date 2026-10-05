@@ -61,7 +61,7 @@ export async function generateSceneImage(force=true){
     if(data.locked)throw Error('场景图已锁定');if(inflight.has(meta))throw Error('当前场景图正在生成');
     let key=data.selected,record=data.images[key];
     if(!record||force){
-        const context=force?visualScene(data.context?.summary??''):data.context??visualScene();
+        const context=force?visualScene():data.context??visualScene();
         if(!context.summary||!context.location&&!context.cast.length)throw Error('请先建立当前场景');
         key=crypto.randomUUID();record={previous:data.selected,context,signature:sceneSignature(context),status:'proposed',createdAt:Date.now()};data.images[key]=record;data.selected=key;data.context=context;
         const msg=[...getContext().chat].reverse().find(m=>!m.is_user&&!m.is_system);if(msg){msg.extra??={};msg.extra.rpg_scene_swipes??={};const swipe=msg.swipe_id??0;const before=msg.extra.rpg_scene_swipes[swipe];msg.extra.rpg_scene_swipes[swipe]={revision:replyRevision(msg.mes),key,spans:before?.revision===replyRevision(msg.mes)?before.spans:[]};if(msg.swipe_info?.[swipe]){msg.swipe_info[swipe].extra??={};msg.swipe_info[swipe].extra.rpg_scene_swipes=structuredClone(msg.extra.rpg_scene_swipes);}}
