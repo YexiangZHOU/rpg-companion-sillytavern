@@ -2,7 +2,7 @@ import { emptyFramework, cloneFramework, applyFrameworkTransaction } from './sta
 import { applyFrameworkReply, buildFrameworkInstructions, FrameworkProtocolError } from './protocol.mjs';
 import { readFrameworkBranch, writeFrameworkSnapshot } from './snapshots.mjs';
 import { frameworkFailure } from './diagnostics.mjs';
-import { readRepair, writeRepair, repairable, repairPrompt, correctedResult } from './repair.mjs';
+import { readRepair, writeRepair, repairable, repairPrompt, correctedResult, refreshConversation } from './repair.mjs';
 import { coverageIssues } from './media.mjs';
 import { panelReviewScope } from './panelReview.mjs';
 
@@ -207,7 +207,7 @@ export class FrameworkChat {
                 // Persist the budget before any request. Reload cannot restart it.
                 await persist(); if (!valid()) return false;
                 let raw;
-                try { raw = await this.generateRepair(repairPrompt(before, original, rejected, failure, ctx.chat.slice(Math.max(0,length-(panelReview?11:5)),-1).filter(m => !m.is_system), completionMode, this.gameContext(), completion?.hint)); }
+                try { raw = await this.generateRepair(repairPrompt(before, original, rejected, failure, panelReview ? refreshConversation(ctx.chat.slice(0,-1)) : ctx.chat.slice(Math.max(0,length-5),-1).filter(m => !m.is_system), completionMode, this.gameContext(), completion?.hint)); }
                 catch { if (valid()) { record.status = 'request_failed'; record.attempts.at(-1).status = 'request_failed'; await persist(); } return false; }
                 if (!valid()) return false;
                 if (typeof raw !== 'string' || raw.length > 180000) { record.status = 'failed'; record.attempts.at(-1).status = 'output_limit'; await persist(); return false; }

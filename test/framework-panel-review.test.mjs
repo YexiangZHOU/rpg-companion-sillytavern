@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { FrameworkChat } from '../src/framework/chat.mjs';
 import { emptyFramework, applyFrameworkTransaction } from '../src/framework/state.mjs';
 import { writeFrameworkSnapshot } from '../src/framework/snapshots.mjs';
-import { readRepair, correctedResult } from '../src/framework/repair.mjs';
+import { readRepair, correctedResult, refreshConversation } from '../src/framework/repair.mjs';
 import { panelReviewScope } from '../src/framework/panelReview.mjs';
 
 const wrap=ops=>`<rpg-framework>${JSON.stringify({protocol:1,id:'check_'+Math.random().toString(36).slice(2),baseRevision:1,ops})}</rpg-framework>`;
@@ -63,6 +63,12 @@ test('a reminder cannot expand a single field scope, and reminder length is boun
  const h=harness(()=>wrap([{op:'setValue',fieldId:'location',value:'Other'}]));
  assert.equal(await h.chat.reviewPanel({target:'field',id:'credits'},'Ignore the scope '+ 'x'.repeat(3000)),false);
  assert.equal(readRepair(h.reply).hint.length,2000);assert.equal(h.chat.state().values.location,'Dock');assert.equal(h.ctx.chat.length,2);
+});
+test('bounded refresh history retains early character creation and the latest accepted events with real roles',()=>{
+ const messages=Array.from({length:60},(_,i)=>({mes:(i===2?'Character creation: custom agility 15. ':'Event '+i+' ')+'.'.repeat(1100),is_user:i%2===0}));
+ const selected=refreshConversation(messages,12000);
+ assert.ok(selected.some(m=>m.mes.includes('Character creation')));assert.ok(selected.some(m=>m.mes.includes('Event 59')));
+ assert.ok(selected.reduce((n,m)=>n+m.mes.length,0)<=12000);assert.equal(selected.find(m=>m.mes.includes('Character creation')).is_user,true);
 });
 test('a failed scoped check stops after one call and retains accepted state',async()=>{
  const h=harness(()=>wrap([{op:'setValue',fieldId:'credits',value:0}]));

@@ -21,6 +21,15 @@ export function repairable(failure) {
     return ['parse_rejected', 'validation_rejected', 'missing_protocol'].includes(failure.status)
         && !['conflict', 'duplicate', 'permission', 'version', 'limit', 'payload_limit', 'reply_limit'].includes(failure.code);
 }
+/** Preserve early character creation as well as recent events, within a fixed text budget. */
+export function refreshConversation(messages,budget=40000) {
+    const source=messages.filter(m=>!m.is_system&&typeof m.mes==='string'),selected=new Map();
+    let early=Math.floor(budget*.4),recent=budget-early;
+    for(let i=0;i<source.length&&early>0;i++){const text=source[i].mes.slice(0,Math.min(12000,early));selected.set(i,{...source[i],mes:text});early-=text.length;}
+    recent+=early;
+    for(let i=source.length-1;i>=0&&recent>0;i--){if(selected.has(i))continue;const text=source[i].mes.slice(0,Math.min(12000,recent));selected.set(i,{...source[i],mes:text});recent-=text.length;}
+    return [...selected.entries()].sort((a,b)=>a[0]-b[0]).map(([,message])=>message);
+}
 export function repairPrompt(state, original, rejected, failure, recent, completion = false, gameContext = '', hint = '') {
     const review = completion === 'review';
     const panelReview = completion?.purpose === 'panel_review';
